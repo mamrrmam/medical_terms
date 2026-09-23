@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hand-written excerpt in the layout of the CDC Tabular List XML, for tests only. -->
+<ICD10CM.tabular>
+  <version>2027</version>
+  <chapter>
+    <name>5</name>
+    <desc>Mental, Behavioral and Neurodevelopmental disorders (F01-F99)</desc>
+    <section id="F40-F48">
+      <desc>Anxiety, dissociative, stress-related, somatoform and other nonpsychotic mental disorders (F40-F48)</desc>
+      <diag>
+        <name>F41</name>
+        <desc>Other anxiety disorders</desc>
+        <diag>
+          <name>F41.0</name>
+          <desc>Panic disorder [episodic paroxysmal anxiety]</desc>
+          <inclusionTerm>
+            <note>Panic attack</note>
+            <note>Panic state</note>
+          </inclusionTerm>
+        </diag>
+        <diag>
+          <name>F41.1</name>
+          <desc>Generalized anxiety disorder</desc>
+          <inclusionTerm>
+            <note>Anxiety neurosis</note>
+            <note>Anxiety reaction</note>
+            <note>Anxiety state</note>
+            <note>Overanxious disorder</note>
+          </inclusionTerm>
+        </diag>
+        <diag>
+          <name>F41.3</name>
+          <desc>Other mixed anxiety disorders</desc>
+        </diag>
+        <diag>
+          <name>F41.8</name>
+          <desc>Other specified anxiety disorders</desc>
+        </diag>
+        <diag>
+          <name>F41.9</name>
+          <desc>Anxiety disorder, unspecified</desc>
+          <inclusionTerm>
+            <note>Anxiety NOS</note>
+          </inclusionTerm>
+        </diag>
+      </diag>
+    </section>
+  </chapter>
+  <chapter>
+    <name>9</name>
+    <desc>Diseases of the circulatory system (I00-I99)</desc>
+    <section id="I20-I25">
+      <desc>Ischemic heart diseases (I20-I25)</desc>
+      <diag>
+        <name>I21</name>
+        <desc>Acute myocardial infarction</desc>
+        <inclusionTerm>
+          <note>myocardial infarction specified as acute or with a stated duration of 4 weeks (28 days) or less from onset</note>
+        </inclusionTerm>
+        <diag>
+          <name>I21.9</name>
+          <desc>Acute myocardial infarction, unspecified</desc>
+          <inclusionTerm>
+            <note>Myocardial infarction (acute) NOS</note>
+          </inclusionTerm>
+        </diag>
+      </diag>
+    </section>
+  </chapter>
+  <chapter>
+    <name>18</name>
+    <desc>Symptoms, signs and abnormal clinical and laboratory findings, not elsewhere classified (R00-R99)</desc>
+    <section id="R40-R46">
+      <desc>Symptoms and signs involving cognition, perception, emotional state and behavior (R40-R46)</desc>
+      <diag>
+        <name>R45</name>
+        <desc>Symptoms and signs involving emotional state</desc>
+        <diag>
+          <name>R45.0</name>
+          <desc>Nervousness</desc>
+          <inclusionTerm>
+            <note>Nervous tension</note>
+          </inclusionTerm>
+        </diag>
+      </diag>
+    </section>
+  </chapter>
+</ICD10CM.tabular>
