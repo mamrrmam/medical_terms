@@ -2,18 +2,19 @@
 name = "medterms"
 version = "0.1.0"
 description = "Medical terminology database: lay terms, ICD-10-CM and related code sets"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.1"]
+pdf = ["pdfplumber>=0.11"]
 dev = ["pytest>=8"]
 
 [project.scripts]
 medterms = "medterms.cli:main"
 
 [tool.setuptools]
-packages = ["medterms", "medterms.loaders"]
+packages = ["medterms", "medterms.loaders", "medterms.extract"]
 
 [tool.setuptools.package-data]
 medterms = ["migrations/*.sql"]
