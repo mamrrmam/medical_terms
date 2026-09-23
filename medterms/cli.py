@@ -5,8 +5,10 @@
   medterms load umls    --db sqlite:///terms.db data/umls/2026AA/
   medterms load icd9cm  --db sqlite:///terms.db data/icd9cm/
   medterms load fees  --db sqlite:///terms.db --payer NS_MSI ns_fees.csv
+  medterms load units --db sqlite:///terms.db --payer NS_MSI ns_units.csv
   medterms load codes --db sqlite:///terms.db --vocabulary ON_OHIP_DX dx.csv --maps-to-vocabulary ICD9CM
   medterms lookup --db sqlite:///terms.db "heart attack" --to ICD10CM
+  medterms extract ns_msi_fees Physicians-Manual.pdf -o ns_fees.csv --report ns_fees.md
 """
 
 import argparse
@@ -45,6 +47,11 @@ def cmd_load(args):
             sys.exit("load fees takes --payer and one CSV file")
         stats = fees.load_fees(db, args.payer, Path(args.paths[0]), effective=args.effective)
         label = f"{args.payer} fees"
+    elif args.vocabulary == "units":
+        if not args.payer or len(args.paths) != 1:
+            sys.exit("load units takes --payer and one CSV file")
+        stats = fees.load_units(db, args.payer, Path(args.paths[0]))
+        label = f"{args.payer} unit values"
     else:
         if not args.target_vocabulary or len(args.paths) != 1:
             sys.exit("load codes takes --vocabulary and one CSV file")
@@ -98,6 +105,22 @@ def cmd_lookup(args):
         print("no matches", file=sys.stderr)
 
 
+def cmd_extract(args):
+    from medterms.extract import fees as extract_fees
+    from medterms.extract.pdftext import read_lines
+
+    profile = extract_fees.Profile.load(args.profile)
+    pdf = Path(args.pdf)
+    result = extract_fees.extract(read_lines(pdf, args.pages or profile.pages), profile)
+    out = Path(args.output or pdf.with_suffix(".csv").name)
+    extract_fees.write_csv(result, out, profile)
+    report = Path(args.report or out.with_suffix(".report.md"))
+    extract_fees.write_report(result, profile, pdf.name, report)
+    print(f"{out}: {len(result.rows)} rows, {len({r['code'] for r in result.rows})} codes; "
+          f"{len(result.no_fee)} records without a fee, {len(result.leftover)} leftover lines, "
+          f"{len(result.duplicates)} conflicting duplicates (see {report})")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="medterms")
     parser.add_argument("--db", default=DEFAULT_DB, help=f"database url (default {DEFAULT_DB}; postgresql://... also works)")
@@ -106,11 +129,11 @@ def main(argv=None):
     sub.add_parser("init", help="create tables").set_defaults(func=cmd_init)
 
     p = sub.add_parser("load", help="load a vocabulary release")
-    p.add_argument("vocabulary", choices=["icd10cm", "umls", "icd9cm", "fees", "codes"])
+    p.add_argument("vocabulary", choices=["icd10cm", "umls", "icd9cm", "fees", "units", "codes"])
     p.add_argument("paths", nargs="+", help="release zip files, directories or CSV files")
     p.add_argument("--year", type=int, help="icd10cm: fiscal year, if it can't be read from the file names")
     p.add_argument("--sabs", help=f"umls: comma-separated source vocabularies (default {','.join(umls.DEFAULT_SABS)})")
-    p.add_argument("--payer", help="fees: payer_id, e.g. NS_MSI")
+    p.add_argument("--payer", help="fees, units: payer_id, e.g. NS_MSI")
     p.add_argument("--effective", help="fees: effective_start (YYYY-MM-DD) for rows that don't have one")
     p.add_argument("--vocabulary", dest="target_vocabulary", help="codes: vocabulary_id to load the list into")
     p.add_argument("--maps-to-vocabulary", help="codes: vocabulary of the optional maps_to column, e.g. ICD9CM")
@@ -121,6 +144,14 @@ def main(argv=None):
     p.add_argument("--to", metavar="VOCABULARY", help="follow mappings to this vocabulary, e.g. ICD10CM")
     p.add_argument("--limit", type=int, default=20)
     p.set_defaults(func=cmd_lookup)
+
+    p = sub.add_parser("extract", help="extract a fee schedule or code list from a PDF into CSV (needs medterms[pdf])")
+    p.add_argument("profile", help="profile TOML path, or a name from medterms/profiles/ such as ns_msi_fees")
+    p.add_argument("pdf")
+    p.add_argument("-o", "--output", help="CSV to write (default: <pdf name>.csv in the current directory)")
+    p.add_argument("--report", help="Markdown report to write (default: <output>.report.md)")
+    p.add_argument("--pages", help="page ranges to read instead of the profile's, e.g. 216-230")
+    p.set_defaults(func=cmd_extract)
 
     args = parser.parse_args(argv)
     args.func(args)

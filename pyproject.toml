@@ -17,7 +17,7 @@ medterms = "medterms.cli:main"
 packages = ["medterms", "medterms.loaders", "medterms.extract"]
 
 [tool.setuptools.package-data]
-medterms = ["migrations/*.sql"]
+medterms = ["migrations/*.sql", "profiles/*.toml"]
 
 [tool.pytest.ini_options]
 pythonpath = [".", "tests"]

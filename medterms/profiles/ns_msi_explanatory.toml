@@ -1,0 +1,18 @@
+# Nova Scotia MSI Physician's Manual, Appendix I: explanatory codes returned on adjudicated claims
+# ("AD001 Service encounter has been refused ...").
+#
+#   medterms extract ns_msi_explanatory Physicians-Manual.pdf -o ns_explanatory.csv
+#   medterms load codes --vocabulary NS_MSI_EXPL ns_explanatory.csv
+
+payer = "NS_MSI"
+kind = "codes"
+pages = "166-212"
+record = '[A-Z]{2}[A-Z0-9]{3}(?=\s|$)'   # AD001, GN154, and WCB responses such as WBHNC
+code_max_x = 80
+skip = [
+    '^PHYSICIAN’S MANUAL 2026',
+    '^Explanatory Description$',
+    '^Code$',
+    '^Section 7: Appendix',
+    '^\(7\.\d+\.\d+\)$',
+]

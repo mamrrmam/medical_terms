@@ -1,0 +1,39 @@
+# Nova Scotia MSI Physician's Manual, Section 8: Schedule of Benefits.
+# Tuned on the 2026 manual (last updated July 2026, 557 pages); check the page range for other editions.
+#
+#   medterms extract ns_msi_fees Physicians-Manual.pdf -o ns_fees.csv --report ns_fees.md
+#
+# Each row: CATEGORY CODE Description .......... BASE UNITS  ANAES UNITS
+# followed by modifier rows ("LO=HOME, RO=DETE (RF=REFD) ...... 23+MU"); modifiers in
+# parentheses are optional on the claim. The page footer names the specialty section.
+
+payer = "NS_MSI"
+pages = "216-534"
+effective_start = "2026-07-01"   # manual last updated July 2026; override with --effective
+
+# Categories are from Appendix B (plus BULK, used for interpretations); radiology
+# interpretations (R1, R5 ...) are printed without one.
+record = '(?:(?P<category>ADON|ALPM|ANAE|BOGR|BULK|CASP|COCR|CONS|CRCR|DEFT|DISL|MAAS|MAFR|MASG|MIFR|MISG|OBST|OPTO|PMNO|PSYC|VADT|VEDT|VIST)\s+(?P<code>[A-Z0-9][A-Z0-9.]*)|R\d+)(?=\s|$)'
+code_max_x = 70
+# LO=HOME, (RF=REFD), ME=VTCR*, SP=DIRD/NCMD/RADI; also the typo US-PR50 and bare DA23/DA45 day ranges
+modifier = '\(?(?:[A-Z]{2}\s?[=-]\s?[A-Z0-9]{4}(?:/[A-Z0-9]{4})*|DA\d\d)\*?\)?'
+heading_max_x = 70
+# upper-case headings, optionally followed by "(lower-case remarks", " - remarks" or " *remarks"
+heading = "[A-Z(][A-Z0-9 ,&/()'’.:=+\\-–]{2,}(?:(?:\\s*\\(|\\s+\\*|\\s+-\\s).*)?"
+
+page_section = 'Section 8: NS MSI Schedule of Benefits\s*[–-]\s*(?P<section>.+?)\s*-\s*\d+$'
+
+skip = [
+    '^PHYSICIAN’S MANUAL 2026$',
+    '^HEALTH$',
+    '^SERVICE BASE ANAES',
+    '^CATEGORY CODE DESCRIPTION',
+    '^CODE GROUP DESCRIPTION UNIT VALUE$',
+    '^(\(SP=[A-Z]{4}\)\s*)+$',        # specialty line under a section title
+    '^\(Includes ',                    # "(Includes SP=GENP, EMMD, COMD)" under a section title
+    '^\(Specialties with unit values',
+]
+
+[columns]
+units = [480, 536]
+anaesthesia_units = [537, 600]

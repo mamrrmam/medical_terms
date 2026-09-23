@@ -1,0 +1,18 @@
+# Nova Scotia MSI Physician's Manual, Appendix H: modifier values ("AG OV65 Person 65 years and older").
+# Codes are written as they appear on claims: AG=OV65.
+#
+#   medterms extract ns_msi_modifiers Physicians-Manual.pdf -o ns_modifiers.csv
+#   medterms load codes --vocabulary NS_MSI_MOD ns_modifiers.csv
+
+payer = "NS_MSI"
+kind = "codes"
+pages = "157-165"
+record = '(?P<type>[A-Z]{2})\s+(?P<value>[A-Z0-9]{4})(?=\s|$)'
+code_template = "{type}={value}"
+code_max_x = 90
+skip = [
+    '^PHYSICIAN’S MANUAL 2026',
+    '^Type Value Description$',
+    '^Section 7: Appendix',
+    '^\(7\.\d+\.\d+\)$',
+]
