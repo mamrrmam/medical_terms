@@ -1,0 +1,21 @@
+# Nova Scotia MSI Physician's Bulletins (the compiled 2021-present PDF): fee announcements as a dated change log.
+#
+#   medterms extract ns_msi_bulletins MSIPhysiciansBulletin.2021-present-.pdf -o ns_bulletins.csv
+#
+# Review ns_bulletins.report.md, then load with `medterms load fees --payer NS_MSI ns_bulletins.csv`.
+
+payer = "NS_MSI"
+kind = "bulletins"
+
+issue = 'PHYSICIAN’S BULLETIN\s+(?P<date>[A-Za-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4})'
+# upper-case headings such as NEW INTERIM FEES, FEE UPDATES, FEE CODE INCREASES (CONTINUED)
+announcement = "[A-Z][A-Z0-9 ,&/()'’–-]{3,}"
+fee_section = 'FEE|RATE|ON[- ]CALL|STIPEND|INCREASE|TERMINAT|SESSIONAL|PREMIUM'
+effective = '[Ee]ffective\s+(?:on\s+)?(?P<date>[A-Z][a-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4})'
+
+record = '(?P<category>ADON|ALPM|ANAE|BOGR|BULK|CASP|COCR|CONS|CRCR|DEFT|DISL|MAAS|MAFR|MASG|MIFR|MISG|OBST|OPTO|PMNO|PSYC|PSYCH|VADT|VEDT|VIST)\s+(?P<code>[A-Z0-9][A-Z0-9.]*)(?=\s|$)'
+code_row = '(?P<code>\d{2}\.\d{1,2}[A-Z]?|[A-Z]{1,5}\d{1,4}[A-Z]?)(?=\s)'
+modifier = '\(?(?:[A-Z]{2}\s?[=-]\s?[A-Z0-9]{4}(?:/[A-Z0-9]{4})*)\*?\)?'
+placeholders = ["TBD", "TBA"]
+
+skip = ['^CONTACT: MSI_Assessment']
