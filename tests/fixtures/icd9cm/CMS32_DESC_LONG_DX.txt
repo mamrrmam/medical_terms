@@ -1,0 +1,7 @@
+30000 Anxiety state, unspecified
+30001 Panic disorder without agoraphobia
+30002 Generalized anxiety disorder
+41090 Acute myocardial infarction of unspecified site, episode of care unspecified
+79921 Nervousness
+V700  Routine general medical examination at a health care facility
+E8000 Railway accident involving collision with rolling stock and injuring railway employee

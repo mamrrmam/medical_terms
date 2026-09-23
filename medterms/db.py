@@ -58,19 +58,32 @@ class Database:
         return bool(self.query(sql, (name,)))
 
     def init_schema(self):
-        """Create the tables if they don't exist yet."""
-        if self.table_exists("concept"):
-            return
-        script = resources.files("medterms").joinpath("schema.sql").read_text()
-        if self.dialect == "sqlite":
-            self.conn.executescript(script)
-        else:
-            # Strip comments so semicolons inside them don't split statements.
-            script = re.sub(r"--[^\n]*", "", script)
-            for stmt in script.split(";"):
-                if stmt.strip():
-                    self.execute(stmt)
-        self.commit()
+        """Apply any migrations in medterms/migrations/ that this database doesn't have yet."""
+        if not self.table_exists("schema_version"):
+            self.execute("CREATE TABLE schema_version (version INTEGER NOT NULL PRIMARY KEY)")
+            if self.table_exists("concept"):  # created before migrations existed
+                self.execute("INSERT INTO schema_version (version) VALUES (1)")
+        applied = {v for (v,) in self.query("SELECT version FROM schema_version")}
+
+        migrations = sorted(
+            (int(f.name.split("_", 1)[0]), f)
+            for f in resources.files("medterms").joinpath("migrations").iterdir()
+            if f.name.endswith(".sql")
+        )
+        for version, f in migrations:
+            if version in applied:
+                continue
+            script = f.read_text()
+            if self.dialect == "sqlite":
+                self.conn.executescript(script)
+            else:
+                # Strip comments so semicolons inside them don't split statements.
+                script = re.sub(r"--[^\n]*", "", script)
+                for stmt in script.split(";"):
+                    if stmt.strip():
+                        self.execute(stmt)
+            self.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+            self.commit()
 
     def next_concept_id(self, floor: int = 1) -> int:
         (max_id,) = self.query("SELECT MAX(concept_id) FROM concept")[0]

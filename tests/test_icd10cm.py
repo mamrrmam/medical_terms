@@ -5,6 +5,7 @@ from pathlib import Path
 
 from conftest import FIXTURES
 from medterms.loaders import icd10cm
+from medterms.loaders.files import find_files
 
 SRC = Path(FIXTURES) / "icd10cm"
 
@@ -60,7 +61,7 @@ def test_find_files_in_nested_zips(tmp_path):
     with zipfile.ZipFile(outer, "w") as zf:
         zf.write(inner, inner.name)
         zf.write(SRC / "icd10cm-order-2027.txt", "Code Descriptions/icd10cm-order-2027.txt")
-    assert set(icd10cm.find_files([outer])) == {"order", "tabular", "index"}
+    assert set(find_files([outer], icd10cm.FILE_PATTERNS)) == {"order", "tabular", "index"}
 
 
 def test_resolve_incomplete_index_codes():

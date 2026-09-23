@@ -95,6 +95,3 @@ UPDATE relationship SET reverse_relationship_id = 'may_be'         WHERE relatio
 UPDATE relationship SET reverse_relationship_id = 'ingredient_of'  WHERE relationship_id = 'has_ingredient';
 UPDATE relationship SET reverse_relationship_id = 'has_ingredient' WHERE relationship_id = 'ingredient_of';
 
--- Future: billing. Kept separate because prices vary by payer, locality and year.
--- CREATE TABLE fee_schedule (concept_id, payer, locality, effective_year, facility_rate, non_facility_rate, ...);
--- CREATE TABLE ncci_edit    (concept_id_1, concept_id_2, modifier_allowed, effective_date, ...);
