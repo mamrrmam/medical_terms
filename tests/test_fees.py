@@ -47,3 +47,10 @@ def test_load_code_list_with_mapping(db, tmp_path):
         "AND r.relationship_id = 'maps_to_approx' JOIN concept t ON t.concept_id = r.concept_id_2 "
         "WHERE s.vocabulary_id = 'TEST_DX' AND s.code = '300'")
     assert rows == [("300.00",)]
+
+
+def test_load_fees_for_another_province(db, tmp_path):
+    csv = tmp_path / "on.csv"
+    csv.write_text("code,description,amount\nA007A,Intermediate assessment (sample),10.00\n")
+    assert fees.load_fees(db, "ON_OHIP", csv, effective="2026-07-01") == {"codes": 1, "fees": 1}
+    assert db.query("SELECT vocabulary_id FROM concept WHERE code = 'A007A'")[0][0] == "ON_OHIP"

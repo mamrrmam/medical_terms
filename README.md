@@ -37,6 +37,7 @@ Load ICD-10-CM first: the UMLS and ICD-9-CM loaders link to existing ICD-10-CM c
 | `medterms/loaders/icd10cm.py` | ICD-10-CM (CDC): codes, chapters and blocks, hierarchy, inclusion terms, Alphabetic Index entries |
 | `medterms/loaders/umls.py` | UMLS Metathesaurus: one concept per CUI with all English strings (CHV and MedlinePlus strings as lay terms), SNOMED CT / RxNorm / MeSH / LOINC codes, and links from CUIs to ICD-10-CM |
 | `medterms/loaders/icd9cm.py` | ICD-9-CM diagnoses and the CMS ICD-9 → ICD-10-CM GEMs |
+| `medterms/loaders/fees.py` | Payer fee schedules and payer code lists from a normalized CSV |
 | `medterms/cli.py` | `medterms init / load / lookup` |
 | `schema/example_seed.sql`, `schema/example_lookup.sql` | Hand-written rows showing how lay terms map to ranked ICD-10-CM candidates (load into an empty database only, because they use fixed ids) |
 | `tests/` | pytest suite, run against sample files written in each source's format; set `MEDTERMS_TEST_PG=postgresql://.../postgres` to run it on PostgreSQL too |
@@ -77,23 +78,44 @@ and sets `valid_end` on codes that were dropped.
 | SNOMED CT (US edition) + NLM SNOMED→ICD-10-CM map | Clinical concepts with many synonyms | UMLS license (free for US use) | **No** |
 | UMLS Metathesaurus, including the Consumer Health Vocabulary (CHV) | Links all of the above; CHV links lay terms to concepts | UMLS license | **No** |
 | ICD-9-CM + GEMs (CMS) | Legacy US diagnoses; used on NS MSI claims | Public domain | Yes |
-| NS MSI Physician's Manual | Nova Scotia fee codes and MSU values | No open licence stated | **No** |
+| Provincial fee schedules and diagnostic lists | Physician billing codes and fees | Crown copyright or attribution licences | **No** |
 | CPT (AMA) | Outpatient procedure and billing codes | Paid AMA license | **No** |
 | OHDSI Athena | All of the above, already normalized into OMOP tables | Per vocabulary | **No** |
 
-## Billing (Nova Scotia first)
+## Billing (Canadian provinces)
 
-Canada has no national physician fee schedule; each province runs its own. Migration 002 adds
-payer-neutral billing tables (`payer`, `unit_value`, `fee_schedule`) and a `NS_MSI` payer:
+Canada has no national physician fee schedule; each province runs its own. The billing tables
+(`payer`, `unit_value`, `fee_schedule`) are payer-neutral, and migration 003 registers every
+province plus Yukon, each with its own fee-code vocabulary. Northwest Territories and Nunavut are left
+out because their physicians are mostly salaried.
 
-- **Diagnoses on NS MSI claims are ICD-9.** The `icd9cm` loader brings in ICD-9-CM and the CMS GEMs to
-  ICD-10-CM, which connects NS claim diagnoses to everything else. NS may accept only a subset of these
-  codes or use its own descriptions; that has not been checked against an MSI list.
-- **Fee codes are MSI Health Service Codes** (e.g. `03.03`, with qualifiers and modifiers such as `RO=HDIN`),
-  priced in MSU (Medical Service Units). They live in the MSI Physician's Manual, which seems to be published
-  only as a PDF (https://msi.medavie.bluecross.ca/physicians-manual/). There is no loader for it yet, and
-  no open licence is stated, so extracted fee data stays out of this repo.
-- Hospital coding in Canada uses ICD-10-CA and CCI, which are licensed by CIHI and can't be redistributed.
+Fee schedules load from one normalized CSV (see `medterms/loaders/fees.py`):
+
+```sh
+medterms load fees --payer ON_OHIP on_fees.csv          # code, description, units/amount, modifier, effective_start, ...
+medterms load codes --vocabulary ON_OHIP_DX on_dx.csv --maps-to-vocabulary ICD9CM   # payer diagnostic lists
+```
+
+What each province publishes, from web research. None of it could be downloaded to confirm file
+formats, so there are no format-specific parsers yet; each needs a converter to the CSV above once
+the files have been seen.
+
+| Payer | Fee codes | Published as | Claim diagnoses |
+|---|---|---|---|
+| `BC_MSP` | 5-digit fee items (`00100`) | PDF | MSP ICD-9 list with BC-specific codes (PDF by chapter) |
+| `AB_AHCIP` | Health service codes (`03.03A`) + modifiers (`CMGP01`) | PDF on open.alberta.ca (attribution licence) | Alberta ICD-9-based list (PDF) |
+| `SK_MSB` | Number + letter (`5B`) | PDF; vendor rate file not public | ICD-9 |
+| `MB_HEALTH` | Prefix + tariff (`8540`) | PDF; vendor tariff rate file (layout in ECPIM) | ICD-9-CM, 4+ digits, no decimal |
+| `ON_OHIP` | `A007` + suffix A/B/C | PDF; Fee Schedule Master text file for vendors | OHIP 3-digit codes (ICD-8 based, PDF) |
+| `QC_RAMQ` | 5-digit codes | PDF manuals (French) | RAMQ CIM-9 and CIM-10 lists (XLSX) |
+| `NB_MEDICARE` | Service codes | PDF | Unclear (ICD-9 or ICD-10) |
+| `NS_MSI` | Health service codes (`03.03`) + modifiers (`RO=HDIN`), in MSU | PDF | ICD-9 (`medterms load icd9cm`) |
+| `PE_HPEI` | Tariff of Fees (codes changed April 2025) | PDF | ICD-9 style |
+| `NL_MCP` | Fee codes (`522`) | PDF | ICD-9 |
+| `YT_YHCIP` | Payment schedule | PDF / web lookup | ICD-9 |
+
+Hospital coding in Canada uses ICD-10-CA and CCI, which are licensed by CIHI and can't be redistributed.
+No provincial fee schedule carries a licence compatible with CC0, so fee data stays local like UMLS data.
 
 This repo is CC0, so it can hold only public-domain data plus our own curated lay mappings. For licensed
 vocabularies, commit only the loader scripts and have each user download the source files with their own license.
