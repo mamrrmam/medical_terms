@@ -4,6 +4,8 @@
   medterms load icd10cm --db sqlite:///terms.db data/icd10cm/
   medterms load umls    --db sqlite:///terms.db data/umls/2026AA/
   medterms load icd9cm  --db sqlite:///terms.db data/icd9cm/
+  medterms load fees  --db sqlite:///terms.db --payer NS_MSI ns_fees.csv
+  medterms load codes --db sqlite:///terms.db --vocabulary ON_OHIP_DX dx.csv --maps-to-vocabulary ICD9CM
   medterms lookup --db sqlite:///terms.db "heart attack" --to ICD10CM
 """
 
@@ -12,7 +14,7 @@ import sys
 from pathlib import Path
 
 from medterms.db import Database
-from medterms.loaders import icd9cm, icd10cm, umls
+from medterms.loaders import fees, icd9cm, icd10cm, umls
 from medterms.normalize import normalize_term
 
 DEFAULT_DB = "sqlite:///terms.db"
@@ -35,9 +37,19 @@ def cmd_load(args):
             sys.exit("load umls takes one release directory")
         stats = umls.load(db, Path(args.paths[0]), sabs=args.sabs.split(",") if args.sabs else None)
         label = "UMLS"
-    else:
+    elif args.vocabulary == "icd9cm":
         stats = icd9cm.load(db, [Path(p) for p in args.paths])
         label = "ICD-9-CM"
+    elif args.vocabulary == "fees":
+        if not args.payer or len(args.paths) != 1:
+            sys.exit("load fees takes --payer and one CSV file")
+        stats = fees.load_fees(db, args.payer, Path(args.paths[0]), effective=args.effective)
+        label = f"{args.payer} fees"
+    else:
+        if not args.target_vocabulary or len(args.paths) != 1:
+            sys.exit("load codes takes --vocabulary and one CSV file")
+        stats = fees.load_codes(db, args.target_vocabulary, Path(args.paths[0]), args.maps_to_vocabulary)
+        label = args.target_vocabulary
     print(f"{label}: " + ", ".join(f"{k}={v}" for k, v in stats.items()))
 
 
@@ -94,10 +106,14 @@ def main(argv=None):
     sub.add_parser("init", help="create tables").set_defaults(func=cmd_init)
 
     p = sub.add_parser("load", help="load a vocabulary release")
-    p.add_argument("vocabulary", choices=["icd10cm", "umls", "icd9cm"])
-    p.add_argument("paths", nargs="+", help="release zip files or directories")
+    p.add_argument("vocabulary", choices=["icd10cm", "umls", "icd9cm", "fees", "codes"])
+    p.add_argument("paths", nargs="+", help="release zip files, directories or CSV files")
     p.add_argument("--year", type=int, help="icd10cm: fiscal year, if it can't be read from the file names")
     p.add_argument("--sabs", help=f"umls: comma-separated source vocabularies (default {','.join(umls.DEFAULT_SABS)})")
+    p.add_argument("--payer", help="fees: payer_id, e.g. NS_MSI")
+    p.add_argument("--effective", help="fees: effective_start (YYYY-MM-DD) for rows that don't have one")
+    p.add_argument("--vocabulary", dest="target_vocabulary", help="codes: vocabulary_id to load the list into")
+    p.add_argument("--maps-to-vocabulary", help="codes: vocabulary of the optional maps_to column, e.g. ICD9CM")
     p.set_defaults(func=cmd_load)
 
     p = sub.add_parser("lookup", help="find concepts by term (exact, then prefix match)")
