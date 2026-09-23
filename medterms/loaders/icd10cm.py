@@ -19,14 +19,13 @@ and sets valid_end on codes that were dropped from the new release.
 """
 
 import datetime
-import io
 import re
 import xml.etree.ElementTree as ET
-import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from medterms.db import Database
+from medterms.loaders.files import decode, find_files
 from medterms.normalize import normalize_term
 
 VOCAB = "ICD10CM"
@@ -60,45 +59,6 @@ class Release:
     inclusion_terms: list[tuple[str, str]] = field(default_factory=list)  # (code, term)
     index_terms: list[tuple[str, str]] = field(default_factory=list)  # (code as printed, term)
     has_tabular: bool = False
-
-
-# ---------------------------------------------------------------------------
-# Finding and reading the release files
-# ---------------------------------------------------------------------------
-
-def find_files(paths: list[Path]) -> dict[str, tuple[str, bytes]]:
-    """Return {'order'|'tabular'|'index': (filename, contents)} from files, dirs and zips."""
-    found: dict[str, tuple[str, bytes]] = {}
-
-    def consider(name: str, read):
-        base = name.rsplit("/", 1)[-1]
-        for kind, pattern in FILE_PATTERNS.items():
-            if pattern.search(base) and kind not in found:
-                found[kind] = (base, read())
-
-    def visit_zip(data_or_path):
-        with zipfile.ZipFile(data_or_path) as zf:
-            for member in zf.namelist():
-                if member.lower().endswith(".zip"):
-                    visit_zip(io.BytesIO(zf.read(member)))
-                else:
-                    consider(member, lambda m=member: zf.read(m))
-
-    for path in paths:
-        files = sorted(path.rglob("*")) if path.is_dir() else [path]
-        for f in files:
-            if f.suffix.lower() == ".zip":
-                visit_zip(f)
-            elif f.is_file():
-                consider(f.name, f.read_bytes)
-    return found
-
-
-def _decode(data: bytes) -> str:
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return data.decode("cp1252")
 
 
 def dotted(code: str) -> str:
@@ -232,12 +192,12 @@ def _first_variant(title: str) -> str:
 
 
 def read_release(paths: list[Path], year: int | None = None) -> Release:
-    files = find_files(paths)
+    files = find_files(paths, FILE_PATTERNS)
     if "order" not in files:
         raise FileNotFoundError("no icd10cm order file (icd10cm-order-YYYY.txt) found in " + ", ".join(map(str, paths)))
     name, data = files["order"]
     release = Release(year=year or int(FILE_PATTERNS["order"].search(name).group(1)))
-    parse_order_file(_decode(data), release)
+    parse_order_file(decode(data), release)
     if "tabular" in files:
         parse_tabular(ET.fromstring(files["tabular"][1]), release)
         release.has_tabular = True

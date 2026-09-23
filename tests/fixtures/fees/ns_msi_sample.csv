@@ -1,0 +1,4 @@
+code,description,units,amount,modifier,locality,effective_start,effective_end
+03.03,Limited visit (sample row; not real MSI data),10.00,,,,2026-04-01,
+03.03,Limited visit (sample row; not real MSI data),12.50,,RO=HDIN,,2026-04-01,
+03.04,Comprehensive visit (sample row; not real MSI data),25.00,,,,2026-04-01,
