@@ -53,6 +53,19 @@ CODE_OUTPUT = ["code", "description", "page"]
 NUMBER = re.compile(r"(\$)?\s*(\d[\d,]*(?:\.\d+)?)\s*(.*)")
 
 
+def profile_path(path: Path | str) -> Path:
+    """A profile file path, or a bundled profile by name from medterms/profiles/ ('ns_msi_fees')."""
+    path = Path(path)
+    if not path.exists() and path.suffix == "":
+        path = Path(str(resources.files("medterms").joinpath("profiles", f"{path}.toml")))
+    return path
+
+
+def profile_kind(path: Path | str) -> str:
+    with open(profile_path(path), "rb") as f:
+        return tomllib.load(f).get("kind", "fees")
+
+
 @dataclass
 class Profile:
     payer: str
@@ -74,9 +87,7 @@ class Profile:
     @classmethod
     def load(cls, path: Path | str) -> "Profile":
         """Load a profile from a path, or by name from medterms/profiles/ ('ns_msi_fees')."""
-        path = Path(path)
-        if not path.exists() and path.suffix == "":
-            path = Path(str(resources.files("medterms").joinpath("profiles", f"{path}.toml")))
+        path = profile_path(path)
         with open(path, "rb") as f:
             raw = tomllib.load(f)
         kind = raw.get("kind", "fees")

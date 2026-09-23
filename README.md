@@ -39,7 +39,8 @@ Load ICD-10-CM first: the UMLS and ICD-9-CM loaders link to existing ICD-10-CM c
 | `medterms/loaders/icd9cm.py` | ICD-9-CM diagnoses and the CMS ICD-9 → ICD-10-CM GEMs |
 | `medterms/loaders/fees.py` | Payer fee schedules, unit values and payer code lists from a normalized CSV |
 | `medterms/extract/` | PDF fee schedule and code list extractor, driven by a per-payer profile; writes the normalized CSV plus a report of lines it couldn't place |
-| `medterms/profiles/` | Extractor profiles: `ns_msi_fees`, `ns_msi_modifiers`, `ns_msi_explanatory` |
+| `medterms/extract/bulletins.py` | Physician's Bulletin extractor: fee announcements as a dated change log (new, updated, terminated) |
+| `medterms/profiles/` | Extractor profiles: `ns_msi_fees`, `ns_msi_modifiers`, `ns_msi_explanatory`, `ns_msi_bulletins` |
 | `medterms/cli.py` | `medterms init / load / extract / lookup` |
 | `schema/example_seed.sql`, `schema/example_lookup.sql` | Hand-written rows showing how lay terms map to ranked ICD-10-CM candidates (load into an empty database only, because they use fixed ids) |
 | `tests/` | pytest suite, run against sample files written in each source's format; set `MEDTERMS_TEST_PG=postgresql://.../postgres` to run it on PostgreSQL too |
@@ -109,6 +110,10 @@ medterms load fees  --payer NS_MSI ns_fees.csv
 medterms load codes --vocabulary NS_MSI_MOD  ns_modifiers.csv
 medterms load codes --vocabulary NS_MSI_EXPL ns_explanatory.csv
 medterms load units --payer NS_MSI ns_units.csv    # unit_name,effective_start,effective_end,amount_per_unit (MSU and AU, Section 4)
+
+# Physician's Bulletins (2021-present compilation): new, updated and terminated fees with effective dates
+medterms extract ns_msi_bulletins MSIPhysiciansBulletin.pdf -o ns_bulletins.csv --compare ns_fees.csv
+medterms load fees --payer NS_MSI ns_bulletins.csv  # load after the manual
 ```
 
 Each extract also writes `<output>.report.md`, which lists records printed without a fee, keys that
@@ -118,6 +123,19 @@ first. One code has many rows: 03.03 is priced separately for each schedule sect
 modifier set, so `fee_schedule` is keyed by code, `section` and `modifier`. Fees printed with
 qualifiers (`62+MU`, `4+T`, `Time Only`) keep the number in `units` / `anaesthesia_units` and the
 printed text in `fee_note`.
+
+The bulletins fill two gaps in the manual: codes it doesn't list yet (interim fees such as 03.08B,
+03.09K/L, NPIV1, TPR1, and the facility on-call codes F1001–F3041), and earlier fees with their
+effective dates. Each bulletin row records its issue, announcement heading, `action` and
+`effective_start` (from the nearest "Effective <date>" sentence, else the issue date). Loading them
+adds dated `fee_schedule` rows with `section = ''` (bulletins don't name a schedule section), sets
+`valid_end` on terminated codes, and never renames codes the manual already named. Placeholder
+codes (`TBD`, `TBA`) and code mentions without a fee are listed in the report and not loaded.
+Explanatory codes announced in bulletins are nearly all in the manual's Appendix I already, so
+they aren't extracted from bulletins.
+
+To price a fee on a date, join `fee_schedule` to `unit_value` on the unit (MSU for `units`, AU for
+`anaesthesia_units`) with `effective_start <= date` and the latest start per code, section and modifier.
 
 What each province publishes, from web research. Only Nova Scotia's files have been seen so far; each other
 province needs its own profile (or converter to the CSV above) once its files have been checked.

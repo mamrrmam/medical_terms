@@ -9,6 +9,7 @@
   medterms load codes --db sqlite:///terms.db --vocabulary ON_OHIP_DX dx.csv --maps-to-vocabulary ICD9CM
   medterms lookup --db sqlite:///terms.db "heart attack" --to ICD10CM
   medterms extract ns_msi_fees Physicians-Manual.pdf -o ns_fees.csv --report ns_fees.md
+  medterms extract ns_msi_bulletins Bulletins.pdf -o ns_bulletins.csv --compare ns_fees.csv
 """
 
 import argparse
@@ -106,15 +107,31 @@ def cmd_lookup(args):
 
 
 def cmd_extract(args):
+    from medterms.extract import bulletins as extract_bulletins
     from medterms.extract import fees as extract_fees
     from medterms.extract.pdftext import read_lines
 
-    profile = extract_fees.Profile.load(args.profile)
+    kind = extract_fees.profile_kind(args.profile)
+    loader = extract_bulletins.BulletinProfile if kind == "bulletins" else extract_fees.Profile
+    profile = loader.load(args.profile)
     pdf = Path(args.pdf)
-    result = extract_fees.extract(read_lines(pdf, args.pages or profile.pages), profile)
+    lines = read_lines(pdf, args.pages or profile.pages)
     out = Path(args.output or pdf.with_suffix(".csv").name)
-    extract_fees.write_csv(result, out, profile)
     report = Path(args.report or out.with_suffix(".report.md"))
+    if kind == "bulletins":
+        result = extract_bulletins.extract(lines, profile)
+        extract_bulletins.write_csv(result, out)
+        known = None
+        if args.compare:
+            import csv
+            with open(args.compare, newline="", encoding="utf-8") as f:
+                known = {row["code"] for row in csv.DictReader(f)}
+        extract_bulletins.write_report(result, profile, pdf.name, report, known)
+        print(f"{out}: {len(result.rows)} rows, {len({r['code'] for r in result.rows})} codes; "
+              f"{len(result.no_fee)} rows without a fee, {len(result.leftover)} placeholder codes (see {report})")
+        return
+    result = extract_fees.extract(lines, profile)
+    extract_fees.write_csv(result, out, profile)
     extract_fees.write_report(result, profile, pdf.name, report)
     print(f"{out}: {len(result.rows)} rows, {len({r['code'] for r in result.rows})} codes; "
           f"{len(result.no_fee)} records without a fee, {len(result.leftover)} leftover lines, "
@@ -151,6 +168,7 @@ def main(argv=None):
     p.add_argument("-o", "--output", help="CSV to write (default: <pdf name>.csv in the current directory)")
     p.add_argument("--report", help="Markdown report to write (default: <output>.report.md)")
     p.add_argument("--pages", help="page ranges to read instead of the profile's, e.g. 216-230")
+    p.add_argument("--compare", metavar="CSV", help="bulletins: list codes missing from this extracted fee CSV")
     p.set_defaults(func=cmd_extract)
 
     args = parser.parse_args(argv)

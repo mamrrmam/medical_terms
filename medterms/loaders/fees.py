@@ -20,7 +20,11 @@ Fee schedule CSV (`medterms load fees --payer ON_OHIP fees.csv`):
   effective_start  YYYY-MM-DD                                               (required, or --effective)
   effective_end    YYYY-MM-DD                                               (optional)
 
-`medterms extract` writes this layout from PDF schedules. Codes become concepts in the
+`medterms extract` writes this layout from PDF schedules and bulletins. A row with
+action = terminated (from bulletins) sets the code's valid_end instead of adding a fee,
+unless a fee for that code starts after the termination date. A file with an `action` column
+(a bulletin change log) never renames codes that already exist; its descriptions become
+'clinical' synonyms under the source <payer>_BULLETINS. Codes become concepts in the
 payer's fee vocabulary (payer.fee_vocabulary_id), named with their most common description;
 every other description becomes a 'clinical' synonym so lookups find it. Each row becomes a
 fee_schedule row keyed by code, section, modifier, locality and effective_start; when two rows
@@ -74,9 +78,11 @@ def _number(value: str, field: str, line: int) -> float | None:
 
 
 def upsert_codes(db: Database, vocabulary_id: str, codes: dict[str, str], domain: str, concept_class: str,
-                 source: str, synonyms: dict[str, set[str]] | None = None) -> dict[str, int]:
+                 source: str, synonyms: dict[str, set[str]] | None = None,
+                 rename_existing: bool = True) -> dict[str, int]:
     """Create or rename concepts for {code: description}, with optional extra 'clinical'
-    names per code; return {code: concept_id}."""
+    names per code; return {code: concept_id}. With rename_existing=False, existing concepts
+    keep their name and validity, and the new description is added as a 'clinical' synonym."""
     existing = dict(db.query("SELECT code, concept_id FROM concept WHERE vocabulary_id = ?", (vocabulary_id,)))
     next_id = db.next_concept_id()
     ids, rows = {}, []
@@ -89,18 +95,21 @@ def upsert_codes(db: Database, vocabulary_id: str, codes: dict[str, str], domain
     db.executemany(
         "INSERT INTO concept (concept_id, vocabulary_id, code, name, domain, concept_class, is_billable) "
         "VALUES (?, ?, ?, ?, ?, ?, 1) "
-        "ON CONFLICT (vocabulary_id, code) DO UPDATE SET name = excluded.name, valid_end = NULL",
+        "ON CONFLICT (vocabulary_id, code) DO "
+        + ("UPDATE SET name = excluded.name, valid_end = NULL" if rename_existing else "NOTHING"),
         rows,
     )
     db.execute("DELETE FROM concept_synonym WHERE source = ?", (source,))
     terms = {}
     for code, name in codes.items():
-        for term, term_type in [(name, "preferred"), *((s, "clinical") for s in (synonyms or {}).get(code, ()))]:
+        name_type = "clinical" if code in existing and not rename_existing else "preferred"
+        for term, term_type in [(name, name_type), *((s, "clinical") for s in (synonyms or {}).get(code, ()))]:
             norm = normalize_term(term)
-            if norm and (term_type == "preferred" or norm != normalize_term(name)):
+            if norm and (term_type == name_type or norm != normalize_term(name)):
                 terms.setdefault((ids[code], norm, term_type), (ids[code], term[:MAX_LEN], norm[:MAX_LEN], term_type, source))
     db.executemany(
-        "INSERT INTO concept_synonym (concept_id, term, term_normalized, term_type, source) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO concept_synonym (concept_id, term, term_normalized, term_type, source) VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT (concept_id, term_normalized, term_type) DO NOTHING",
         list(terms.values()),
     )
     return ids
@@ -121,12 +130,19 @@ def load_fees(db: Database, payer_id: str, path: Path, effective: str | None = N
 
     names: dict[str, Counter] = {}
     fees: dict[tuple, tuple] = {}
+    terminated: dict[str, str] = {}
     conflicts = 0
     for line, row in enumerate(rows, start=2):
         code = row["code"]
         if not code:
             continue
         names.setdefault(code, Counter())[row["description"]] += 1
+        if row.get("action") == "terminated":
+            date = _date(row.get("effective_start", ""), "effective_start", line) or effective
+            if date is None:
+                raise ValueError(f"line {line}: terminated {code} has no effective_start")
+            terminated[code] = max(date, terminated.get(code, date))
+            continue
         units = _number(row.get("units", ""), "units", line)
         amount = _number(row.get("amount", ""), "amount", line)
         anaesthesia = _number(row.get("anaesthesia_units", ""), "anaesthesia_units", line)
@@ -145,9 +161,14 @@ def load_fees(db: Database, payer_id: str, path: Path, effective: str | None = N
             continue
         fees[key] = value
 
-    codes = {code: counts.most_common(1)[0][0] for code, counts in names.items()}
-    ids = upsert_codes(db, vocabulary_id, codes, "procedure", "fee_code", f"{payer_id}_FEES",
-                       synonyms={code: set(counts) for code, counts in names.items()})
+    # name each code with its most common description, preferring any over none
+    codes = {code: max(counts, key=lambda d: (bool(d), counts[d])) for code, counts in names.items()}
+    # A bulletin change log (it has an `action` column) adds dated fees and new codes but doesn't
+    # rename codes a schedule already named, and keeps its synonyms under its own source.
+    history = "action" in rows[0]
+    ids = upsert_codes(db, vocabulary_id, codes, "procedure", "fee_code",
+                       f"{payer_id}_{'BULLETINS' if history else 'FEES'}",
+                       synonyms={code: set(counts) for code, counts in names.items()}, rename_existing=not history)
     db.executemany(
         "INSERT INTO fee_schedule (payer_id, concept_id, section, modifier, locality, effective_start, effective_end, "
         "category, heading, description, units, amount, anaesthesia_units, fee_note) "
@@ -159,8 +180,15 @@ def load_fees(db: Database, payer_id: str, path: Path, effective: str | None = N
         [(payer_id, ids[code], section, modifier, locality, start, *value)
          for (code, section, modifier, locality, start), value in fees.items()],
     )
+    # A terminated code gets valid_end, unless some fee for it (in this or an earlier load) starts later.
+    for code, date in terminated.items():
+        db.execute(
+            "UPDATE concept SET valid_end = ? WHERE concept_id = ? AND NOT EXISTS "
+            "(SELECT 1 FROM fee_schedule WHERE concept_id = ? AND effective_start > ?)",
+            (date, ids[code], ids[code], date),
+        )
     db.commit()
-    return {"codes": len(codes), "fees": len(fees), "conflicts": conflicts}
+    return {"codes": len(codes), "fees": len(fees), "conflicts": conflicts, "terminated": len(terminated)}
 
 
 def load_units(db: Database, payer_id: str, path: Path) -> dict[str, int]:

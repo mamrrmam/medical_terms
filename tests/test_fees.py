@@ -6,7 +6,7 @@ SAMPLE = f"{FIXTURES}/fees/ns_msi_sample.csv"
 
 
 def test_load_fees(db):
-    assert fees.load_fees(db, "NS_MSI", SAMPLE) == {"codes": 2, "fees": 3, "conflicts": 0}
+    assert fees.load_fees(db, "NS_MSI", SAMPLE) == {"codes": 2, "fees": 3, "conflicts": 0, "terminated": 0}
     rows = db.query(
         "SELECT c.code, f.modifier, f.units, f.effective_start FROM fee_schedule f "
         "JOIN concept c ON c.concept_id = f.concept_id WHERE f.payer_id = 'NS_MSI' ORDER BY c.code, f.modifier")
@@ -52,7 +52,7 @@ def test_load_code_list_with_mapping(db, tmp_path):
 def test_load_fees_for_another_province(db, tmp_path):
     csv = tmp_path / "on.csv"
     csv.write_text("code,description,amount\nA007A,Intermediate assessment (sample),10.00\n")
-    assert fees.load_fees(db, "ON_OHIP", csv, effective="2026-07-01") == {"codes": 1, "fees": 1, "conflicts": 0}
+    assert fees.load_fees(db, "ON_OHIP", csv, effective="2026-07-01") == {"codes": 1, "fees": 1, "conflicts": 0, "terminated": 0}
     assert db.query("SELECT vocabulary_id FROM concept WHERE code = 'A007A'")[0][0] == "ON_OHIP"
 
 
@@ -70,7 +70,7 @@ def test_load_extracted_ns_rows(db, tmp_path):
         "39.1,Incision of palate,20,,4,anaesthesia_units 4+T,,Surgery,MISG,INCISION OF PALATE,2026-07-01,470\n"
         "C1001,Community On-Call,,150,,,,Family Practice,ADON,,2026-07-01,300\n"
     )
-    assert fees.load_fees(db, "NS_MSI", csv) == {"codes": 4, "fees": 7, "conflicts": 1}
+    assert fees.load_fees(db, "NS_MSI", csv) == {"codes": 4, "fees": 7, "conflicts": 1, "terminated": 0}
     rows = db.query(
         "SELECT f.section, f.modifier, f.units, f.fee_note FROM fee_schedule f JOIN concept c ON c.concept_id = f.concept_id "
         "WHERE c.code = '03.03' ORDER BY f.section, f.modifier")
@@ -101,3 +101,44 @@ def test_load_units(db, tmp_path):
     rows = db.query("SELECT unit_name, effective_start, amount_per_unit FROM unit_value ORDER BY unit_name, effective_start")
     assert [(u, str(d), float(a)) for u, d, a in rows] == [
         ("AU", "2026-04-01", 27.93), ("MSU", "2025-04-01", 2.90), ("MSU", "2026-04-01", 2.96)]
+
+
+def test_load_bulletin_changes(db, tmp_path):
+    """Bulletin rows: dated fee history, and terminations that set valid_end."""
+    csv = tmp_path / "bulletins.csv"
+    csv.write_text(
+        "code,description,units,amount,fee_note,modifier,category,effective_start,action,old_units,issue_date\n"
+        "03.09L,Referring Provider - requesting advice,13,,13 MSU + MU,,CONS,2026-07-17,updated,,2026-07-17\n"
+        "03.09L,,13,,13 MSU per 15 mins,,,2026-07-17,updated,,2026-07-17\n"
+        "03.09L,Specialist Telephone Advice - Referring Physician,11.5,,,,CONS,2022-09-19,updated,,2022-09-19\n"
+        "08.5A,Clinical Psychiatry,63.11,,,,PSYCH,2022-05-27,terminated,,2022-05-27\n"
+        "03.07,Limited Consultation,29.50,,,,,2021-04-01,updated,27.00,2021-03-19\n"
+        "03.07,Limited Consultation,,,,,,2020-01-01,terminated,,2020-01-01\n"
+    )
+    assert fees.load_fees(db, "NS_MSI", csv) == {"codes": 3, "fees": 3, "conflicts": 1, "terminated": 2}
+    rows = db.query(
+        "SELECT f.effective_start, f.units FROM fee_schedule f JOIN concept c ON c.concept_id = f.concept_id "
+        "WHERE c.code = '03.09L' ORDER BY f.effective_start")
+    assert [(str(d), float(u)) for d, u in rows] == [("2022-09-19", 11.5), ("2026-07-17", 13.0)]
+    ends = dict(db.query("SELECT code, valid_end FROM concept WHERE code IN ('08.5A', '03.07', '03.09L')"))
+    assert {k: v and str(v) for k, v in ends.items()} == {"08.5A": "2022-05-27", "03.07": None, "03.09L": None}
+    assert db.query("SELECT COUNT(*) FROM fee_schedule f JOIN concept c ON c.concept_id = f.concept_id "
+                    "WHERE c.code = '08.5A'")[0][0] == 0
+
+
+def test_bulletins_do_not_rename_schedule_codes(db, tmp_path):
+    schedule = tmp_path / "schedule.csv"
+    schedule.write_text("code,description,units,effective_start\n03.03,Subsequent Visits,13,2026-07-01\n"
+                        "03.03,Home Visit,21.3,2026-07-01\n")
+    fees.load_fees(db, "NS_MSI", schedule)
+    changes = tmp_path / "changes.csv"
+    changes.write_text("code,description,units,modifier,effective_start,action\n"
+                       "03.03,Prolonged Nursing Home Visit,21.3,LO=NRHM,2026-01-16,updated\n"
+                       "03.08B,Focused Assessment,17,RF=REFD,2026-07-17,new\n")
+    fees.load_fees(db, "NS_MSI", changes)
+    names = dict(db.query("SELECT code, name FROM concept WHERE vocabulary_id = 'NS_MSI'"))
+    assert names == {"03.03": "Subsequent Visits", "03.08B": "Focused Assessment"}
+    terms = {(t, s) for t, s in db.query(
+        "SELECT s.term, s.source FROM concept_synonym s JOIN concept c ON c.concept_id = s.concept_id WHERE c.code = '03.03'")}
+    assert terms == {("Subsequent Visits", "NS_MSI_FEES"), ("Home Visit", "NS_MSI_FEES"),
+                     ("Prolonged Nursing Home Visit", "NS_MSI_BULLETINS")}
