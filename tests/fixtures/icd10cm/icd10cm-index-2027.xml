@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hand-written excerpt in the layout of the CDC Alphabetic Index XML, for tests only. -->
+<ICD10CM.index>
+  <version>2027</version>
+  <title>ICD-10-CM INDEX TO DISEASES and INJURIES</title>
+  <letter>
+    <title>A</title>
+    <mainTerm>
+      <title>Anxiety</title>
+      <code>F41.9</code>
+      <term level="1">
+        <title>depression <nemod>(mild or not persistent)</nemod></title>
+        <code>F41.8</code>
+      </term>
+      <term level="1">
+        <title>episodic paroxysmal</title>
+        <code>F41.0</code>
+      </term>
+      <term level="1">
+        <title>generalized</title>
+        <code>F41.1</code>
+      </term>
+      <term level="1">
+        <title>neurosis</title>
+        <see>Neurosis, anxiety</see>
+      </term>
+      <term level="1">
+        <title>panic type</title>
+        <code>F41.0</code>
+      </term>
+    </mainTerm>
+    <mainTerm>
+      <title>Attack, attacks</title>
+      <term level="1">
+        <title>heart</title>
+        <see>Infarct, myocardium</see>
+      </term>
+      <term level="1">
+        <title>panic</title>
+        <code>F41.0</code>
+      </term>
+    </mainTerm>
+  </letter>
+  <letter>
+    <title>I</title>
+    <mainTerm>
+      <title>Infarct, infarction</title>
+      <term level="1">
+        <title>myocardium, myocardial <nemod>(acute)</nemod></title>
+        <code>I21.9</code>
+        <term level="2">
+          <title>unspecified site</title>
+          <code>I21.-</code>
+        </term>
+      </term>
+    </mainTerm>
+  </letter>
+  <letter>
+    <title>N</title>
+    <mainTerm>
+      <title>Nervous</title>
+      <term level="1">
+        <title>tension</title>
+        <code>R45.0</code>
+      </term>
+    </mainTerm>
+    <mainTerm>
+      <title>Nervousness</title>
+      <code>R45.0</code>
+    </mainTerm>
+  </letter>
+</ICD10CM.index>

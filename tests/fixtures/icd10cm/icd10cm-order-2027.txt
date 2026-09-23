@@ -1,0 +1,10 @@
+00001 F41     0 Other anxiety disorders                                      Other anxiety disorders
+00002 F410    1 Panic disorder [episodic paroxysmal anxiety]                 Panic disorder [episodic paroxysmal anxiety]
+00003 F411    1 Generalized anxiety disorder                                 Generalized anxiety disorder
+00004 F413    1 Other mixed anxiety disorders                                Other mixed anxiety disorders
+00005 F418    1 Other specified anxiety disorders                            Other specified anxiety disorders
+00006 F419    1 Anxiety disorder, unspecified                                Anxiety disorder, unspecified
+00007 I21     0 Acute myocardial infarction                                  Acute myocardial infarction
+00008 I219    1 Acute myocardial infarction, unspecified                     Acute myocardial infarction, unspecified
+00009 R45     0 Symptoms and signs involving emotional state                 Symptoms and signs involving emotional state
+00010 R450    1 Nervousness                                                  Nervousness
