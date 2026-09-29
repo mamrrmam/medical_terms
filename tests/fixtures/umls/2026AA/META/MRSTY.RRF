@@ -4,3 +4,5 @@ C0270549|T048|A1.2|Mental or Behavioral Dysfunction|AT00000002||
 C0027051|T047|A1.2|Disease or Syndrome|AT00000003||
 C0000970|T109|A1.2|Organic Chemical|AT00000004||
 C0000970|T121|A1.2|Pharmacologic Substance|AT00000005||
+C1234567|T028|A1.2.3.5|Gene or Genome|AT00000099||
+C7654321|T109|A1.4.1|Organic Chemical|AT00000098||

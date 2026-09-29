@@ -34,9 +34,9 @@ SRC_TABULAR = "ICD10CM_TABULAR"
 SRC_INDEX = "ICD10CM_INDEX"
 
 FILE_PATTERNS = {
-    "order": re.compile(r"icd10cm[-_]order[-_](\d{4})\.txt$", re.I),
-    "tabular": re.compile(r"icd10cm[-_]tabular[-_](\d{4})\.xml$", re.I),
-    "index": re.compile(r"icd10cm[-_]index[-_](\d{4})\.xml$", re.I),
+    "order": re.compile(r"icd10cm[-_]order[-_]+(\d{4})\.txt$", re.I),
+    "tabular": re.compile(r"icd10cm[-_]tabular[-_]+(\d{4})\.xml$", re.I),
+    "index": re.compile(r"icd10cm[-_]index[-_]+(\d{4})\.xml$", re.I),
 }
 
 MAX_TERM_LEN = 1000  # concept_synonym.term is VARCHAR(1000)

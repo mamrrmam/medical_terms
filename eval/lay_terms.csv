@@ -1,0 +1,79 @@
+term,icd10,icd9,ns
+# Everyday conditions: expected ICD-10-CM and ICD-9-CM code prefixes ('|' = alternatives)
+heart attack,I21,410,
+high blood pressure,I10,401,
+stroke,I63|I64,434|436,
+pink eye,H10,372.3,
+shingles,B02,053,
+slipped disc,M51|M50,722,
+tummy ache,R10,789.0,
+sugar diabetes,E11|E13|E14,250,
+diabetes,E11|E13|E14,250,
+heartburn,R12,787.1,
+flu,J11|J10,487|488,
+common cold,J00,460,
+sore throat,J02,462,
+strep throat,J02.0,034.0,
+ear infection,H66|H65,382|381,
+sinus infection,J32|J01,473|461,
+bladder infection,N30,595,
+urinary tract infection,N39.0,599.0,
+kidney stones,N20,592,
+gallstones,K80,574,
+asthma,J45,493,
+emphysema,J43,492,
+pneumonia,J18,486|485|481,
+bronchitis,J20|J40|J42,490|466|491,
+migraine,G43,346,
+concussion,S06.0,850,
+sprained ankle,S93.4,845.0,
+broken arm,S42|S52,812|813|818,
+broken hip,S72,820,
+arthritis,M19|M13|M15,715|716,
+gout,M10,274,
+back pain,M54,724,
+sciatica,M54.3|M54.4,724.3,
+depression,F32|F33,311|296.2|296.3,
+anxiety,F41,300.0,
+insomnia,G47.0|F51.0,780.52|307.4,
+bed wetting,N39.4|F98.0|R32,788.3|307.6,
+hives,L50,708,
+eczema,L30|L20,692|691,
+acne,L70,706.1,
+dandruff,L21.0,690.1,
+athlete's foot,B35.3,110.4,
+cold sore,B00,054,
+chicken pox,B01,052,
+mono,B27,075,
+lazy eye,H50|H53.0,378|368.0,
+nearsighted,H52.1,367.1,
+hay fever,J30,477,
+nosebleed,R04.0,784.7,
+fainting,R55,780.2,
+dizziness,R42,780.4,
+high cholesterol,E78,272,
+underactive thyroid,E03,244,
+anemia,D64|D50|D53,285|280|281,
+piles,K64,455,
+constipation,K59.0,564.0,
+diarrhea,R19.7|K59.1|A09,787.91|009,
+bunion,M20.1,727.1|735.0,
+tennis elbow,M77.1,726.32,
+morning sickness,O21,643,
+miscarriage,O03,634,
+# Procedures: should reach some NS fee code
+appendectomy,,,*
+tonsillectomy,,,*
+vasectomy,,,*
+c-section,,,*
+knee replacement,,,*
+hip replacement,,,*
+colonoscopy,,,*
+cataract surgery,,,*
+wart removal,,,*
+stitches,,,*
+tubes tied,,,*
+hernia repair,,,*
+gallbladder removal,,,*
+circumcision,,,*
+mole removal,,,*

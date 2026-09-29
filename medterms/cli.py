@@ -7,6 +7,7 @@
   medterms load fees  --db sqlite:///terms.db --payer NS_MSI ns_fees.csv
   medterms load units --db sqlite:///terms.db --payer NS_MSI ns_units.csv
   medterms load codes --db sqlite:///terms.db --vocabulary ON_OHIP_DX dx.csv --maps-to-vocabulary ICD9CM
+  medterms link   --db sqlite:///terms.db
   medterms lookup --db sqlite:///terms.db "heart attack" --to ICD10CM
   medterms extract ns_msi_fees Physicians-Manual.pdf -o ns_fees.csv --report ns_fees.md
   medterms extract ns_msi_bulletins Bulletins.pdf -o ns_bulletins.csv --compare ns_fees.csv
@@ -18,7 +19,6 @@ from pathlib import Path
 
 from medterms.db import Database
 from medterms.loaders import fees, icd9cm, icd10cm, umls
-from medterms.normalize import normalize_term
 
 DEFAULT_DB = "sqlite:///terms.db"
 
@@ -61,49 +61,30 @@ def cmd_load(args):
     print(f"{label}: " + ", ".join(f"{k}={v}" for k, v in stats.items()))
 
 
-# Hops followed by `lookup --to`: lay/clinical term on a UMLS concept -> its codes,
-# curated lay mappings, and cross-vocabulary maps such as the ICD-9-CM GEMs.
-MAPPING_RELATIONSHIPS = ("umls_cui_of", "may_be", "maps_to", "maps_to_approx")
-
-
 def cmd_lookup(args):
+    from medterms.lookup import find_codes, find_terms
+
     db = Database(args.db)
-    norm = normalize_term(args.term)
-    match = "(s.term_normalized = ? OR s.term_normalized LIKE ?)"
-    params = [norm, norm + " %"]
-    if args.to:
-        hops = ", ".join("?" * len(MAPPING_RELATIONSHIPS))
-        sql = (
-            "SELECT DISTINCT t.vocabulary_id, t.code, t.name, s.term, s.term_type, t.is_billable, "
-            "CASE WHEN s.term_normalized = ? THEN 0 ELSE 1 END AS exact "
-            "FROM concept_synonym s JOIN concept c ON c.concept_id = s.concept_id "
-            "JOIN concept_relationship r ON r.concept_id_1 = c.concept_id "
-            f"AND r.relationship_id IN ({hops}) "
-            "JOIN concept t ON t.concept_id = r.concept_id_2 AND t.vocabulary_id = ? "
-            f"WHERE {match} "
-            "UNION "
-            "SELECT c.vocabulary_id, c.code, c.name, s.term, s.term_type, c.is_billable, "
-            "CASE WHEN s.term_normalized = ? THEN 0 ELSE 1 END "
-            "FROM concept_synonym s JOIN concept c ON c.concept_id = s.concept_id AND c.vocabulary_id = ? "
-            f"WHERE {match} "
-            "ORDER BY 7, 6 DESC, 2 LIMIT ?"
-        )
-        params = [norm, *MAPPING_RELATIONSHIPS, args.to, *params, norm, args.to, *params, args.limit]
-    else:
-        sql = (
-            "SELECT c.vocabulary_id, c.code, c.name, s.term, s.term_type, c.is_billable "
-            "FROM concept_synonym s JOIN concept c ON c.concept_id = s.concept_id "
-            f"WHERE {match} "
-            "ORDER BY CASE WHEN s.term_normalized = ? THEN 0 ELSE 1 END, c.is_billable DESC, c.code "
-            "LIMIT ?"
-        )
-        params = [*params, norm, args.limit]
-    rows = db.query(sql, params)
-    for vocab, code, name, term, term_type, billable, *_ in rows:
-        flag = "*" if billable else " "
-        print(f"{vocab:8} {code:9}{flag} {name}   <- {term} [{term_type}]")
+    rows = find_codes(db, args.term, args.to, args.limit) if args.to else find_terms(db, args.term, args.limit)
+    for m in rows:
+        flag = "*" if m.billable else " "
+        score = f" ({m.confidence:.2f})" if m.confidence < 1 else ""
+        print(f"{m.vocabulary:8} {m.code:9}{flag} {m.name}   <- {m.term} [{m.term_type}]{score}")
     if not rows:
         print("no matches", file=sys.stderr)
+
+
+def cmd_evaluate(args):
+    from medterms.lookup import evaluate
+
+    evaluate(Database(args.db), Path(args.file), top=args.top, verbose=args.verbose)
+
+
+def cmd_link(args):
+    from medterms import linker
+
+    stats = linker.link(Database(args.db), args.targets.split(",") if args.targets else None)
+    print("links: " + ", ".join(f"{k}={v}" for k, v in stats.items()))
 
 
 def cmd_extract(args):
@@ -155,6 +136,16 @@ def main(argv=None):
     p.add_argument("--vocabulary", dest="target_vocabulary", help="codes: vocabulary_id to load the list into")
     p.add_argument("--maps-to-vocabulary", help="codes: vocabulary of the optional maps_to column, e.g. ICD9CM")
     p.set_defaults(func=cmd_load)
+
+    p = sub.add_parser("link", help="link UMLS concepts to ICD-10-CM, ICD-9-CM and NS fee codes by name (after loading)")
+    p.add_argument("--targets", help=f"comma-separated target vocabularies (default: those loaded of {','.join(__import__('medterms.linker').linker.TARGETS)})")
+    p.set_defaults(func=cmd_link)
+
+    p = sub.add_parser("evaluate", help="measure how well lay terms reach expected codes (CSV: term,icd10,icd9,ns)")
+    p.add_argument("file")
+    p.add_argument("--top", type=int, default=3, help="a hit must be in the top N results (default 3)")
+    p.add_argument("-v", "--verbose", action="store_true", help="print each term's top results")
+    p.set_defaults(func=cmd_evaluate)
 
     p = sub.add_parser("lookup", help="find concepts by term (exact, then prefix match)")
     p.add_argument("term")

@@ -11,21 +11,32 @@ A terminology database for mapping:
 ```sh
 pip install -e ".[dev]"            # add ",postgres" for PostgreSQL, ",pdf" for the PDF extractor
 
-# Download the ICD-10-CM release zips from https://www.cdc.gov/nchs/icd/icd-10-cm/files.html
-# ("Code Descriptions in Tabular Order" and "Tabular and Index" files) into data/icd10cm/, then:
+# ICD-10-CM from CDC (https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2027/):
+# icd10cm-code-descriptions-2027.zip and icd10cm-table-and-index-2027.zip into data/icd10cm/
 medterms --db sqlite:///terms.db load icd10cm data/icd10cm/
 
-# After your UMLS license is approved: download the Metathesaurus Full Subset from
-# https://www.nlm.nih.gov/research/umls/licensedcontent/umlsknowledgesources.html
-medterms --db sqlite:///terms.db load umls data/umls/2026AA/
-
-# ICD-9-CM v32 descriptions and the 2018 diagnosis GEMs from CMS (for Nova Scotia claim diagnoses)
+# ICD-9-CM v32 descriptions (diagnoses and procedures) and the 2018 GEMs (both directions) from CMS
+# (icd-9-cm-v32-master-descriptions.zip, 2018-icd-10-cm-general-equivalence-mappings.zip) into data/icd9cm/
 medterms --db sqlite:///terms.db load icd9cm data/icd9cm/
 
+# UMLS (license required). The release zip is read in place; nothing needs unpacking.
+medterms --db sqlite:///terms.db load umls data/umls/umls-2026AA-metathesaurus-level0.zip
+
+# Optional: Nova Scotia fee codes (see "Nova Scotia from the Physician's Manual PDF" below)
+medterms --db sqlite:///terms.db load fees --payer NS_MSI ns_fees.csv
+
+# Link concepts to codes by name, then look terms up and measure coverage
+medterms --db sqlite:///terms.db link
 medterms --db sqlite:///terms.db lookup "heart attack" --to ICD10CM
+medterms --db sqlite:///terms.db evaluate eval/lay_terms.csv
 ```
 
-Load ICD-10-CM first: the UMLS and ICD-9-CM loaders link to existing ICD-10-CM codes but never create them.
+Load ICD-10-CM and ICD-9-CM before UMLS: the UMLS loader links to existing ICD codes but never creates them.
+Run `link` last, and again after loading anything new.
+
+If the project sits in an iCloud-synced folder (such as `~/Documents` with Desktop & Documents sync on), iCloud
+marks files in `.venv` as hidden and Python stops finding the installed package. Keep the environment in a folder
+iCloud skips, e.g. `uv venv .venv.nosync && ln -s .venv.nosync .venv`.
 
 `--db postgresql://user:pass@host/dbname` works the same way. `data/` and `*.db` are git-ignored.
 
@@ -35,19 +46,66 @@ Load ICD-10-CM first: the UMLS and ICD-9-CM loaders link to existing ICD-10-CM c
 |---|---|
 | `medterms/migrations/` | Numbered SQL migrations, applied in order by `Database.init_schema()` |
 | `medterms/loaders/icd10cm.py` | ICD-10-CM (CDC): codes, chapters and blocks, hierarchy, inclusion terms, Alphabetic Index entries |
-| `medterms/loaders/umls.py` | UMLS Metathesaurus: one concept per CUI with all English strings (CHV and MedlinePlus strings as lay terms), SNOMED CT / RxNorm / MeSH / LOINC codes, and links from CUIs to ICD-10-CM |
-| `medterms/loaders/icd9cm.py` | ICD-9-CM diagnoses and the CMS ICD-9 → ICD-10-CM GEMs |
+| `medterms/loaders/umls.py` | UMLS Metathesaurus, read from the release zip: one concept per CUI with its English strings (CHV and MedlinePlus as lay terms), SNOMED CT / MeSH codes, and links from CUIs to ICD-10-CM and ICD-9-CM |
+| `medterms/loaders/icd9cm.py` | ICD-9-CM diagnoses and procedures, and the CMS GEMs in both directions |
+| `medterms/linker.py` | `medterms link`: approximate links from UMLS concepts to ICD-10-CM, ICD-9-CM and NS fee codes by name, and across the GEMs |
+| `medterms/lookup.py` | Term lookup ranked by link confidence, and `medterms evaluate` |
+| `eval/lay_terms.csv` | 61 everyday conditions with expected ICD-10-CM / ICD-9-CM code prefixes, and 15 procedures that should reach an NS fee code |
 | `medterms/loaders/fees.py` | Payer fee schedules, unit values and payer code lists from a normalized CSV |
 | `medterms/extract/` | PDF fee schedule and code list extractor, driven by a per-payer profile; writes the normalized CSV plus a report of lines it couldn't place |
 | `medterms/extract/bulletins.py` | Physician's Bulletin extractor: fee announcements as a dated change log (new, updated, terminated) |
 | `medterms/profiles/` | Extractor profiles: `ns_msi_fees`, `ns_msi_modifiers`, `ns_msi_explanatory`, `ns_msi_bulletins` |
-| `medterms/cli.py` | `medterms init / load / extract / lookup` |
+| `medterms/cli.py` | `medterms init / load / extract / link / lookup / evaluate` |
 | `schema/example_seed.sql`, `schema/example_lookup.sql` | Hand-written rows showing how lay terms map to ranked ICD-10-CM candidates (load into an empty database only, because they use fixed ids) |
 | `tests/` | pytest suite, run against sample files written in each source's format; set `MEDTERMS_TEST_PG=postgresql://.../postgres` to run it on PostgreSQL too |
 
 The schema uses SQL that runs unchanged on SQLite, PostgreSQL and MySQL 8, and it follows the
 [OMOP vocabulary model](https://ohdsi.github.io/CommonDataModel/) in simplified form. The loaders use
 `INSERT ... ON CONFLICT`, which SQLite and PostgreSQL support but MySQL does not.
+
+### Which UMLS sources, and why
+
+The default sources serve lay term → clinical concept → diagnosis, procedure and billing codes; anything
+else only adds size. RXNORM and LNC can be added with `--sabs`.
+
+| Source | Contributes |
+|---|---|
+| CHV, MEDLINEPLUS | Lay terms ("heart attack", "pink eye"), stored as `lay` synonyms |
+| MTH | UMLS's own concept names |
+| ICD10CM, ICD9CM | Links from concepts to codes loaded from CDC / CMS (the Level 0 subset has ICD-9-CM only) |
+| SNOMEDCT_US | Clinical synonyms and SNOMED codes (Full Subset only) |
+| MSH | Headings and entry terms only; its ~700k supplementary chemical names are skipped |
+| NCI, HPO | Terms on condition, symptom and procedure concepts only |
+
+With the Level 0 subset (2026AA) this loads 381k concepts and 754k terms in about 35 seconds, and the
+database with ICD-10-CM, ICD-9-CM, UMLS, NS fees and links is about 400 MB.
+
+### Linking concepts to codes
+
+UMLS puts lay terms on general concepts (Myocardial infarction) while billable codes sit on narrower ones,
+and the Level 0 subset has no ICD-10-CM atoms, so only ~5% of lay concepts reach a code through UMLS alone.
+`medterms link` adds approximate links (`maps_to_approx`, with a confidence and source `MATCH/<how>`):
+
+| How | Example | Confidence |
+|---|---|---|
+| name | concept name equals a code's title, inclusion term or index entry | ≤ 1.0 |
+| words | same words in any order, ignoring NOS/unspecified, parentheses, "without …", disk/disc | ≤ 0.95 |
+| contained | concept's words plus up to two more, unless they change context (pregnancy, postprocedural) | ≤ 0.6 |
+| broader | all but one of the concept's words, leaving a disease name (infective cystitis → Cystitis) | ≤ 0.55 |
+| gem | an ICD-9-CM link carried to ICD-10-CM through the GEMs, or the reverse | × 0.7–0.8 |
+
+Diagnosis concepts link only to diagnosis codes and procedure concepts only to procedure codes.
+
+`medterms evaluate eval/lay_terms.csv` on the Level 0 subset, after linking:
+
+| Target | Reached a code | Expected code in top 3 |
+|---|---|---|
+| ICD-10-CM | 59 / 61 (97%) | 57 / 61 (93%) |
+| ICD-9-CM (NS claim diagnoses) | 58 / 61 (95%) | 55 / 61 (90%) |
+| NS fee codes (procedures) | 9 / 15 (60%) | |
+
+The misses are mostly lay terms the vocabularies don't have ("broken arm", "morning sickness", "tubes tied",
+"cataract surgery"). Those need curated lay mappings, not more matching.
 
 ### How a lay term reaches a code (example from the test data)
 

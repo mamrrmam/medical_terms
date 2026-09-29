@@ -1,4 +1,4 @@
-"""Load ICD-9-CM diagnosis codes and the CMS ICD-9-CM -> ICD-10-CM General Equivalence Mappings.
+"""Load ICD-9-CM diagnosis and procedure codes and the CMS ICD-9-CM -> ICD-10-CM General Equivalence Mappings.
 
 Nova Scotia MSI (and several other provinces) still take ICD-9 diagnosis codes on physician
 claims, so these give NS claim codes a path to ICD-10-CM, UMLS and lay terms.
@@ -8,7 +8,15 @@ Both are public domain CMS files. Download the final ICD-9-CM release (v32, FY20
 diagnosis GEMs, then point the loader at the zips or a directory holding them. It uses:
 
   CMS32_DESC_LONG_DX.txt  (or ..._SHORT_DX)  code, whitespace, description     (required)
+  CMS32_DESC_LONG_SG.txt  (or ..._SHORT_SG)  procedure codes, same layout       (optional)
   2018_I9gem.txt                              ICD-9 code, ICD-10 code, 5 flags   (optional)
+  2018_I10gem.txt                             ICD-10 code, ICD-9 code, 5 flags   (optional; the backward
+                                              map, which covers ICD-10 codes no ICD-9 code maps to)
+
+Diagnoses are dotted after three characters (410.90, V01.1, E800.0) and procedures after
+two (46.51). Both live in the ICD9CM vocabulary, as UMLS does; they can't collide because
+diagnosis codes always have three characters before the dot. Procedure codes give NS fee
+codes, whose descriptions often match ICD-9-CM procedure titles, a route to UMLS.
 
 GEM flags are approximate / no map / combination / scenario / choice list. Exact entries
 become 'maps_to', approximate ones 'maps_to_approx'; 'no map' rows are skipped. Load
@@ -30,9 +38,13 @@ SOURCE_GEM = "CMS_GEM"
 FILE_PATTERNS = {
     "long": re.compile(r"CMS\d+_DESC_LONG_DX\.txt$", re.I),
     "short": re.compile(r"CMS\d+_DESC_SHORT_DX\.txt$", re.I),
+    "long_sg": re.compile(r"CMS\d+_DESC_LONG_SG\.txt$", re.I),
+    "short_sg": re.compile(r"CMS\d+_DESC_SHORT_SG\.txt$", re.I),
     "gem": re.compile(r"\d{4}_I9gem\.txt$", re.I),
+    "gem10": re.compile(r"\d{4}_I10gem\.txt$", re.I),
 }
 CODE = re.compile(r"^(\d{3,5}|V\d{2,4}|E\d{3,4})$")
+PROCEDURE_CODE = re.compile(r"^\d{3,4}$")
 LINE = re.compile(r"^(\S+)\s+(.*\S)\s*$")
 
 
@@ -42,12 +54,18 @@ def dotted(code: str) -> str:
     return code if len(code) <= split else f"{code[:split]}.{code[split:]}"
 
 
-def parse_descriptions(text: str) -> tuple[dict[str, str], int]:
+def dotted_procedure(code: str) -> str:
+    """'4651' -> '46.51', '581' -> '58.1'."""
+    return f"{code[:2]}.{code[2:]}"
+
+
+def parse_descriptions(text: str, procedures: bool = False) -> tuple[dict[str, str], int]:
+    pattern, fmt = (PROCEDURE_CODE, dotted_procedure) if procedures else (CODE, dotted)
     codes, rejected = {}, 0
     for line in text.splitlines():
         m = LINE.match(line)
-        if m and CODE.match(m.group(1)):
-            codes[dotted(m.group(1))] = m.group(2)
+        if m and pattern.match(m.group(1)):
+            codes[fmt(m.group(1))] = m.group(2)
         elif line.strip():
             rejected += 1
     return codes, rejected
@@ -63,6 +81,14 @@ def parse_gem(text: str) -> list[tuple[str, str, str]]:
     return rows
 
 
+def _raw_gem(text: str):
+    """(first code, second code, flags) as printed, undotted."""
+    for line in text.split("\n"):
+        parts = line.split()
+        if len(parts) == 3 and len(parts[2]) == 5 and parts[2].isdigit():
+            yield parts[0], parts[1], parts[2]
+
+
 def load(db: Database, paths: list[Path]) -> dict[str, int]:
     db.init_schema()
     files = find_files(paths, FILE_PATTERNS)
@@ -71,18 +97,25 @@ def load(db: Database, paths: list[Path]) -> dict[str, int]:
         raise FileNotFoundError("no CMS##_DESC_LONG_DX.txt / _SHORT_DX.txt found in " + ", ".join(map(str, paths)))
     version = re.search(r"CMS(\d+)", desc[0], re.I).group(1)
     codes, rejected = parse_descriptions(decode(desc[1]))
+    procedures: dict[str, str] = {}
+    if sg := files.get("long_sg") or files.get("short_sg"):
+        procedures, sg_rejected = parse_descriptions(decode(sg[1]), procedures=True)
+        rejected += sg_rejected
 
     db.execute("UPDATE vocabulary SET version = ? WHERE vocabulary_id = ?", (f"v{version}", VOCAB))
     existing = dict(db.query("SELECT code, concept_id FROM concept WHERE vocabulary_id = ?", (VOCAB,)))
     next_id = db.next_concept_id()
     ids, rows = {}, []
-    for code, name in codes.items():
+    for code, name in [*codes.items(), *procedures.items()]:
         cid = existing.get(code)
         if cid is None:
             cid, next_id = next_id, next_id + 1
         ids[code] = cid
-        domain = "observation" if code[0] in "VE" else "condition"
-        rows.append((cid, VOCAB, code, name, domain, "code", 1))
+        if code in procedures:
+            domain, concept_class = "procedure", "procedure"
+        else:
+            domain, concept_class = ("observation" if code[0] in "VE" else "condition"), "code"
+        rows.append((cid, VOCAB, code, name, domain, concept_class, 1))
     db.executemany(
         "INSERT INTO concept (concept_id, vocabulary_id, code, name, domain, concept_class, is_billable) "
         "VALUES (?, ?, ?, ?, ?, ?, ?) "
@@ -93,16 +126,22 @@ def load(db: Database, paths: list[Path]) -> dict[str, int]:
     db.execute("DELETE FROM concept_synonym WHERE source = ?", (SOURCE,))
     db.executemany(
         "INSERT INTO concept_synonym (concept_id, term, term_normalized, term_type, source) VALUES (?, ?, ?, 'preferred', ?)",
-        [(ids[c], name, normalize_term(name), SOURCE) for c, name in codes.items() if normalize_term(name)],
+        [(ids[c], name, normalize_term(name), SOURCE)
+         for c, name in [*codes.items(), *procedures.items()] if normalize_term(name)],
     )
 
-    stats = {"codes": len(codes), "rejected_lines": rejected, "maps_to": 0, "maps_to_approx": 0,
+    stats = {"codes": len(codes), "procedures": len(procedures), "rejected_lines": rejected, "maps_to": 0, "maps_to_approx": 0,
              "no_map": 0, "icd10cm_not_loaded": 0}
-    if "gem" in files:
+    if "gem" in files or "gem10" in files:
         db.execute("DELETE FROM concept_relationship WHERE source = ?", (SOURCE_GEM,))
         icd10 = dict(db.query("SELECT code, concept_id FROM concept WHERE vocabulary_id = 'ICD10CM'"))
         links = {}
-        for icd9, icd10_code, flags in parse_gem(decode(files["gem"][1])):
+        entries = parse_gem(decode(files["gem"][1])) if "gem" in files else []
+        if "gem10" in files:
+            # backward map rows are 'ICD-10 ICD-9 flags'; turn them around to ICD-9 -> ICD-10
+            entries += [(dotted(icd9_code), icd10_dotted(icd10_code), flags)
+                        for icd10_code, icd9_code, flags in _raw_gem(decode(files["gem10"][1]))]
+        for icd9, icd10_code, flags in entries:
             if flags[1] == "1":
                 stats["no_map"] += 1
                 continue

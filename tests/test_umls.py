@@ -4,10 +4,11 @@ from pathlib import Path
 
 import pytest
 from conftest import FIXTURES
-from medterms.loaders import icd10cm, umls
+from medterms.loaders import icd9cm, icd10cm, umls
 from medterms.normalize import normalize_term
 
 UMLS = Path(FIXTURES) / "umls"
+ALL_SABS = [*umls.DEFAULT_SABS, "RXNORM"]
 ICD = Path(FIXTURES) / "icd10cm"
 
 
@@ -39,14 +40,16 @@ def synonyms(db, vocab, code):
 @pytest.fixture
 def loaded(db):
     icd10cm.load(db, icd10cm.read_release([ICD]))
-    stats = umls.load(db, UMLS)
+    icd9cm.load(db, [Path(FIXTURES) / "icd9cm"])
+    stats = umls.load(db, UMLS, sabs=ALL_SABS)
     return db, stats
 
 
 def test_concepts_and_codes(loaded):
     db, stats = loaded
-    assert stats["cuis"] == 5
+    assert stats["cuis"] == 6  # the gene CUI stays for its MeSH heading
     assert stats["icd10cm_not_loaded"] == 1  # Z99.99 isn't in the ICD-10-CM fixture
+    assert stats["icd9cm_not_loaded"] == 0
     assert db.query("SELECT version FROM vocabulary WHERE vocabulary_id = 'UMLS'")[0][0] == "2026AA"
 
     assert concept(db, "UMLS", "C0003467")[1:3] == ("Anxiety", "condition")  # T048 beats T184
@@ -100,10 +103,40 @@ def test_reload_keeps_ids_and_retires(loaded, tmp_path):
             f.writelines(part)
     shutil.copy(UMLS / "2026AA/META/MRSTY.RRF", meta)
 
-    stats = umls.load(db, tmp_path)
+    stats = umls.load(db, tmp_path, sabs=ALL_SABS)
     assert stats["retired"] == 3  # CUI + RxNorm IN + BN
     assert concept(db, "UMLS", "C0270549")[0] == cid
     assert concept(db, "UMLS", "C0000970")[3] is not None
     assert concept(db, "UMLS", "C0003467")[3] is None
     assert db.query("SELECT COUNT(*) FROM concept_synonym")[0][0] == count - 3
     assert db.query("SELECT version FROM vocabulary WHERE vocabulary_id = 'UMLS'")[0][0] == "2026AB"
+
+
+def test_icd9cm_links_and_source_filters(loaded):
+    db, _ = loaded
+    rows = db.query(
+        "SELECT icd.code FROM concept_synonym s JOIN concept cui ON cui.concept_id = s.concept_id "
+        "JOIN concept_relationship r ON r.concept_id_1 = cui.concept_id AND r.relationship_id = 'umls_cui_of' "
+        "JOIN concept icd ON icd.concept_id = r.concept_id_2 AND icd.vocabulary_id = 'ICD9CM' "
+        "WHERE s.term_normalized = 'constant worrying'")
+    assert rows == [("300.02",)]
+    assert concept(db, "ICD9CM", "300.02")[1] == "Generalized anxiety disorder"  # not renamed
+
+    # NCI terms only on condition/symptom/procedure concepts
+    assert ("Heart attack, acute", "clinical") in synonyms(db, "UMLS", "C0027051")
+    assert ("BRCA1 Gene", "clinical") not in synonyms(db, "UMLS", "C1234567")
+    # MeSH supplementary chemical names are skipped entirely
+    assert concept(db, "UMLS", "C7654321") is None and concept(db, "MESH", "C000001") is None
+
+
+def test_load_from_release_zip(db, tmp_path):
+    import zipfile
+    icd10cm.load(db, icd10cm.read_release([ICD]))
+    archive = tmp_path / "umls-2026AA-metathesaurus-level0.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        for f in (UMLS / "2026AA/META").iterdir():
+            z.write(f, f"2026AA/META/{f.name}")
+    stats = umls.load(db, archive, sabs=ALL_SABS)
+    assert stats["cuis"] == 6
+    assert db.query("SELECT version FROM vocabulary WHERE vocabulary_id = 'UMLS'")[0][0] == "2026AA"
+    assert to_icd10cm(db, "heart attack") == ["I21.9"]
