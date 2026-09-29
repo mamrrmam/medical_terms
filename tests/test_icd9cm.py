@@ -32,12 +32,17 @@ def gem_targets(db, icd9_code):
 def test_load_with_gems(db):
     icd10cm.load(db, icd10cm.read_release([ICD10]))
     stats = icd9cm.load(db, [ICD9])
-    assert stats == {"codes": 7, "rejected_lines": 0, "maps_to": 4, "maps_to_approx": 1,
+    assert stats == {"codes": 7, "procedures": 3, "rejected_lines": 0, "maps_to": 4, "maps_to_approx": 1,
                      "no_map": 1, "icd10cm_not_loaded": 1}  # Z00.00 isn't in the ICD-10-CM fixture
 
     name, domain = db.query("SELECT name, domain FROM concept WHERE vocabulary_id = 'ICD9CM' AND code = '300.02'")[0]
     assert (name, domain) == ("Generalized anxiety disorder", "condition")
     assert gem_targets(db, "300.02") == [("F41.1", "maps_to")]
+
+    # procedures are dotted after two digits and share the ICD9CM vocabulary
+    procedures = db.query("SELECT code, domain FROM concept WHERE vocabulary_id = 'ICD9CM' "
+                          "AND concept_class = 'procedure' ORDER BY code")
+    assert procedures == [("32.41", "procedure"), ("32.49", "procedure"), ("58.1", "procedure")]
     assert gem_targets(db, "410.90") == [("I21.9", "maps_to_approx")]
     assert db.query("SELECT version FROM vocabulary WHERE vocabulary_id = 'ICD9CM'")[0][0] == "v32"
 

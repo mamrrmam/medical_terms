@@ -4,4 +4,6 @@ data/
 __pycache__/
 *.egg-info/
 .pytest_cache/
-.venv/
+.venv
+*.nosync
+.DS_Store

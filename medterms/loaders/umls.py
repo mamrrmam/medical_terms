@@ -1,8 +1,9 @@
 """Load the UMLS Metathesaurus (NLM) into the concept tables.
 
-Needs a UMLS license (https://uts.nlm.nih.gov/uts/signup-login). Download the
-"UMLS Metathesaurus Full Subset" or run MetamorphoSys, then point the loader at the
-release directory (or its META/ subdirectory). It reads:
+Needs a UMLS license (https://uts.nlm.nih.gov/uts/signup-login). Download a Metathesaurus
+subset (the Level 0 subset lacks SNOMED CT and ICD-10-CM atoms; the Full Subset has them)
+and point the loader at the release zip, the release directory or its META/ subdirectory.
+A zip is read in place, so the 10+ GB release never has to be unpacked. It reads:
 
   MRCONSO.RRF   concept names, one row per atom             (required)
   MRSTY.RRF     semantic types, used to set concept.domain   (optional)
@@ -16,8 +17,14 @@ What gets written:
                         (CHV and MEDLINEPLUS strings as term_type 'lay')
   SNOMED, RXNORM,       one concept per source code, linked to its CUI with
   MESH, LOINC           'has_umls_cui' / 'umls_cui_of'
-  ICD10CM               existing concepts (from the ICD-10-CM loader) get linked to their
-                        CUIs; ICD-10-CM codes are never created or renamed here
+  ICD10CM, ICD9CM       existing concepts (from the ICD-10-CM and ICD-9-CM loaders) get linked
+                        to their CUIs; these codes are never created or renamed here
+
+The default sources are the ones that serve lay term -> clinical concept -> diagnosis,
+procedure and billing codes: MTH names, CHV and MedlinePlus lay terms, ICD-10-CM and
+ICD-9-CM links, SNOMED CT (when the subset has it), MeSH headings and entry terms (not its
+~700k supplementary chemical names), and NCI Thesaurus and HPO terms for conditions,
+symptoms and procedures only. RXNORM and LNC are available with --sabs.
 
 So "heart attack" (a CHV string on a CUI) reaches ICD-10-CM through the CUI's
 'umls_cui_of' links, and SNOMED codes reach ICD-10-CM through a shared CUI.
@@ -27,7 +34,9 @@ UMLS content may not be redistributed: keep the database out of this repository.
 
 import datetime
 import gzip
+import io
 import re
+import zipfile
 from pathlib import Path
 
 from medterms.db import Database
@@ -36,7 +45,14 @@ from medterms.normalize import normalize_term
 VOCAB = "UMLS"
 SOURCE = "UMLS"
 
-DEFAULT_SABS = ["MTH", "SNOMEDCT_US", "ICD10CM", "RXNORM", "MSH", "LNC", "CHV", "MEDLINEPLUS"]
+DEFAULT_SABS = ["MTH", "CHV", "MEDLINEPLUS", "ICD10CM", "ICD9CM", "SNOMEDCT_US", "MSH", "NCI", "HPO"]
+
+# Keep only these term types from a source (MeSH: headings and entry terms, not the
+# supplementary chemical records NM/N1/CE/PCE or permuted terms PM).
+SAB_TTYS = {"MSH": {"MH", "ET", "EP", "EN", "PEP"}}
+# Keep a source's atoms only on concepts in these domains (NCI and HPO are large and mostly
+# genes, drugs, anatomy and research terms outside this project's scope).
+SAB_DOMAINS = {"NCI": {"condition", "symptom", "procedure"}, "HPO": {"condition", "symptom", "observation"}}
 
 # Sources whose codes become concepts of their own. Sources not listed only contribute strings.
 CODE_VOCABS = {
@@ -45,8 +61,9 @@ CODE_VOCABS = {
     "MSH": ("MESH", "Medical Subject Headings"),
     "LNC": ("LOINC", "LOINC"),
     "ICD10CM": ("ICD10CM", "ICD-10-CM"),
+    "ICD9CM": ("ICD9CM", "ICD-9-CM"),
 }
-LINK_ONLY = {"ICD10CM"}  # owned by the ICD-10-CM loader
+LINK_ONLY = {"ICD10CM", "ICD9CM"}  # owned by the ICD-10-CM and ICD-9-CM loaders
 
 # Term types to prefer as a code's name, best first.
 PREFERRED_TTY = {
@@ -55,6 +72,7 @@ PREFERRED_TTY = {
     "MSH": ["MH", "NM"],
     "LNC": ["LC", "LN"],
     "ICD10CM": ["PT"],
+    "ICD9CM": ["PT"],
 }
 LAY_SABS = {"CHV", "MEDLINEPLUS"}
 ABBREVIATION_TTYS = {"AB", "ACR", "AA"}
@@ -88,19 +106,25 @@ BATCH = 50_000
 # Reading RRF files
 # ---------------------------------------------------------------------------
 
-def find_meta(path: Path) -> Path:
-    hits = sorted(path.rglob("MRCONSO.RRF*")) if path.is_dir() else [path]
+def find_meta(path: Path):
+    """The directory holding MRCONSO.RRF: a Path, or a zipfile.Path inside a release zip."""
+    if path.is_file() and zipfile.is_zipfile(path):
+        root = zipfile.Path(zipfile.ZipFile(path))
+        hits = sorted((p for p in root.rglob("MRCONSO.RRF*")), key=lambda p: p.at)
+    else:
+        hits = sorted(path.rglob("MRCONSO.RRF*")) if path.is_dir() else [path]
     if not hits:
         raise FileNotFoundError(f"no MRCONSO.RRF under {path}")
     return hits[0].parent
 
 
-def release_version(path: Path) -> str:
-    match = re.search(r"(\d{4}A[AB])", str(path.resolve()))
+def release_version(path) -> str:
+    text = str(path.resolve()) if isinstance(path, Path) else str(path)
+    match = re.search(r"(\d{4}A[AB])", text)
     return match.group(1) if match else "unknown"
 
 
-def column_layout(meta: Path) -> dict[str, list[str]]:
+def column_layout(meta) -> dict[str, list[str]]:
     layout = {name: cols.split(",") for name, cols in DEFAULT_COLUMNS.items()}
     mrfiles = meta / "MRFILES.RRF"
     if mrfiles.exists():
@@ -110,16 +134,20 @@ def column_layout(meta: Path) -> dict[str, list[str]]:
     return layout
 
 
-def _rows(path: Path):
-    opener = gzip.open if path.suffix == ".gz" else open
-    with opener(path, "rt", encoding="utf-8", newline="\n") as f:
+def _rows(path):
+    if path.name.endswith(".gz"):
+        f = io.TextIOWrapper(gzip.open(path.open("rb")), encoding="utf-8", newline="\n")
+    else:
+        f = io.TextIOWrapper(path.open("rb"), encoding="utf-8", newline="\n")
+    with f:
         for line in f:
             yield line.rstrip("\r\n").split("|")
 
 
-def read_rrf(meta: Path, name: str, layout: dict[str, list[str]]):
+def read_rrf(meta, name: str, layout: dict[str, list[str]]):
     """Yield dicts for every row of `name`, across split/gzipped parts."""
-    parts = sorted(p for p in meta.glob(name + "*") if p.name == name or p.name.startswith(name + "."))
+    parts = sorted((p for p in meta.iterdir() if p.name == name or p.name.startswith(name + ".")),
+                   key=lambda p: p.name)
     if not parts:
         return
     cols = layout[name]
@@ -128,7 +156,7 @@ def read_rrf(meta: Path, name: str, layout: dict[str, list[str]]):
             yield dict(zip(cols, fields))
 
 
-def read_domains(meta: Path, layout) -> dict[str, str]:
+def read_domains(meta, layout) -> dict[str, str]:
     rank = {d: i for i, d in enumerate(DOMAIN_ORDER)}
     domains: dict[str, str] = {}
     for row in read_rrf(meta, "MRSTY.RRF", layout):
@@ -139,7 +167,7 @@ def read_domains(meta: Path, layout) -> dict[str, str]:
     return domains
 
 
-def read_atoms(meta: Path, layout, sabs: set[str]):
+def read_atoms(meta, layout, sabs: set[str]):
     """Yield (cui, [atoms]) for English, unsuppressed atoms from the selected sources.
 
     MRCONSO is sorted by CUI, so atoms are grouped by consecutive CUI. If a CUI shows up
@@ -148,6 +176,8 @@ def read_atoms(meta: Path, layout, sabs: set[str]):
     group, cui = [], None
     for row in read_rrf(meta, "MRCONSO.RRF", layout):
         if row["LAT"] != "ENG" or row["SUPPRESS"] != "N" or row["SAB"] not in sabs:
+            continue
+        if row["SAB"] in SAB_TTYS and row["TTY"] not in SAB_TTYS[row["SAB"]]:
             continue
         if row["CUI"] != cui and group:
             yield cui, group
@@ -210,7 +240,7 @@ def load(db: Database, path: Path, sabs: list[str] | None = None, version: str |
     ensure_vocabularies(db, version, created_vocabs)
 
     existing: dict[tuple[str, str], int] = {}
-    for vocab in created_vocabs | {VOCAB, "ICD10CM"}:
+    for vocab in created_vocabs | {VOCAB} | {CODE_VOCABS[s][0] for s in LINK_ONLY}:
         for code, cid in db.query("SELECT code, concept_id FROM concept WHERE vocabulary_id = ?", (vocab,)):
             existing[(vocab, code)] = cid
 
@@ -220,7 +250,7 @@ def load(db: Database, path: Path, sabs: list[str] | None = None, version: str |
     next_id = db.next_concept_id()
     seen: set[tuple[str, str]] = set()
     concepts, synonyms, links = [], [], []
-    stats = {"cuis": 0, "codes": 0, "synonyms": 0, "links": 0, "icd10cm_not_loaded": 0}
+    stats = {"cuis": 0, "codes": 0, "synonyms": 0, "links": 0, "icd10cm_not_loaded": 0, "icd9cm_not_loaded": 0}
 
     def concept_id(vocab, code):
         nonlocal next_id
@@ -256,6 +286,9 @@ def load(db: Database, path: Path, sabs: list[str] | None = None, version: str |
 
     for cui, atoms in read_atoms(meta, layout, sabs):
         domain = domains.get(cui, "other")
+        atoms = [a for a in atoms if a["SAB"] not in SAB_DOMAINS or domain in SAB_DOMAINS[a["SAB"]]]
+        if not atoms:
+            continue
         cui_id = concept_id(VOCAB, cui)
         if (VOCAB, cui) not in seen:
             seen.add((VOCAB, cui))
@@ -276,7 +309,7 @@ def load(db: Database, path: Path, sabs: list[str] | None = None, version: str |
             if sab in LINK_ONLY:
                 code_id = existing.get((vocab, code))
                 if code_id is None:
-                    stats["icd10cm_not_loaded"] += 1
+                    stats[f"{vocab.lower()}_not_loaded"] += 1
                     continue
             else:
                 code_id = concept_id(vocab, code)
