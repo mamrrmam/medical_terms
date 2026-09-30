@@ -100,6 +100,16 @@ and the Level 0 subset has no ICD-10-CM atoms, so only ~5% of lay concepts reach
 | broader | all but one of the concept's words, leaving a disease name (infective cystitis → Cystitis) | ≤ 0.55 |
 | gem | an ICD-9-CM link carried to ICD-10-CM through the GEMs, or the reverse | × 0.7–0.8 |
 
+The 2018 GEMs only cover billable ICD-10-CM codes that existed in 2018, so `link` first derives the
+missing ICD-10-CM ↔ ICD-9-CM mappings from the ICD-10-CM hierarchy (source `GEM_DERIVED`): a category
+takes the ICD-9-CM codes its billable descendants map to when at least 20% agree, counting initial
+encounters only and open fractures at half weight (S72.00 "fracture of neck of femur" → 820.8), and a
+code added after 2018 borrows from its "unspecified" sibling (F32.A "Depression, unspecified" → 311 /
+296.20 via F32.9). `lookup` follows these too.
+
+When a term names one concept and is only a listed synonym of another, the named concept ranks first
+("hip fracture" is the name of Hip Fractures; Fracture of pelvis merely lists it).
+
 Diagnosis concepts link only to diagnosis codes and procedure concepts only to procedure codes. Every
 link, UMLS's own included, is halved when the code's title adds context the concept doesn't have
 ("Complications …, hypertension" or "Postprocedural hypertension" for Hypertensive disease) or is a
@@ -110,12 +120,12 @@ manifestation code ICD doesn't allow as a primary diagnosis ("… in diseases cl
 | Target | Reached a code | Expected code in top 3 |
 |---|---|---|
 | ICD-10-CM | 61 / 61 | 61 / 61 |
-| ICD-9-CM (NS claim diagnoses) | 61 / 61 | 59 / 61 |
+| ICD-9-CM (NS claim diagnoses) | 61 / 61 | 61 / 61 |
 | NS fee codes (procedures) | 15 / 15 | 15 / 15 |
 
 Linking alone reached 93% / 90% / 60%; the rest comes from the curated lexicon ("tummy ache", "ear
-infection", "broken arm", "morning sickness", "tubes tied", "stitches"). Still missed: "broken hip"
-and "depression" in ICD-9-CM, where UMLS's links are thin.
+infection", "broken arm", "morning sickness", "tubes tied", "stitches"). "Hip fracture" and
+"depression" reach ICD-9-CM through derived mappings (below).
 
 ### Annotating text
 

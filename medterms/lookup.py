@@ -45,6 +45,14 @@ def find_terms(db: Database, term: str, limit: int = 20) -> list[Match]:
 _LEXICON = None
 
 
+def primary_sense(concept_name: str, term: str) -> bool:
+    """Whether the concept is named by this term (same words, any order, plurals folded)."""
+    from medterms.linker import word_key
+
+    key = word_key(term)
+    return key is not None and key == word_key(concept_name)
+
+
 def _default_lexicon():
     global _LEXICON
     if _LEXICON is None:
@@ -87,7 +95,8 @@ def curated_codes(db: Database, term: str, vocabulary: str, lexicon=None) -> lis
 def find_codes(db: Database, term: str, vocabulary: str, limit: int = 20, lexicon=None) -> list[Match]:
     """Codes in `vocabulary` for a term, best first: codes from the curated lay lexicon when one
     of its phrases covers the whole term (lexicon=False to skip it), then exact term matches
-    before prefix matches, then by link confidence (manifestation codes count half), then
+    before prefix matches, then concepts named by the term before those listing it as a
+    synonym, then by link confidence (manifestation codes count half), then
     billable codes, then "unspecified" codes first."""
     curated = [] if lexicon is False else curated_codes(db, term, vocabulary, lexicon)
     norm = normalize_term(term)
@@ -95,22 +104,25 @@ def find_codes(db: Database, term: str, vocabulary: str, limit: int = 20, lexico
     hops = ", ".join("?" * len(MAPPING_RELATIONSHIPS))
     sql = (
         "SELECT t.vocabulary_id, t.code, t.name, s.term, s.term_type, t.is_billable, "
-        f"CASE WHEN s.term_normalized = ? THEN 0 ELSE 1 END, COALESCE(r.confidence, {DEFAULT_CONFIDENCE}) "
+        f"CASE WHEN s.term_normalized = ? THEN 0 ELSE 1 END, COALESCE(r.confidence, {DEFAULT_CONFIDENCE}), c.name "
         "FROM concept_synonym s JOIN concept c ON c.concept_id = s.concept_id "
         f"JOIN concept_relationship r ON r.concept_id_1 = c.concept_id AND r.relationship_id IN ({hops}) "
         "JOIN concept t ON t.concept_id = r.concept_id_2 AND t.vocabulary_id = ? "
         f"WHERE {match} "
         "UNION ALL "
         "SELECT c.vocabulary_id, c.code, c.name, s.term, s.term_type, c.is_billable, "
-        "CASE WHEN s.term_normalized = ? THEN 0 ELSE 1 END, 1 "
+        "CASE WHEN s.term_normalized = ? THEN 0 ELSE 1 END, 1, c.name "
         "FROM concept_synonym s JOIN concept c ON c.concept_id = s.concept_id AND c.vocabulary_id = ? "
         f"WHERE {match} LIMIT 5000"
     )
     params = [norm, *MAPPING_RELATIONSHIPS, vocabulary, norm, norm + " %", norm, vocabulary, norm, norm + " %"]
     best: dict[str, tuple[tuple, Match]] = {}
-    for vocab, code, name, matched, term_type, billable, exact, confidence in db.query(sql, params):
+    for vocab, code, name, matched, term_type, billable, exact, confidence, source_name in db.query(sql, params):
         confidence = float(confidence) * (0.5 if MANIFESTATION.search(name) else 1.0)
-        rank = (exact, -confidence, -billable, "unspecified" not in name.lower())
+        # a concept named by the term beats one that only lists it as a synonym
+        # ("hip fracture" names Hip Fractures; Fracture of pelvis merely lists it)
+        rank = (exact, not primary_sense(source_name, matched), -confidence, -billable,
+                "unspecified" not in name.lower())
         if code not in best or rank < best[code][0]:
             best[code] = (rank, Match(vocab, code, name, matched, term_type, billable, confidence))
     ranked = [m for _, m in sorted(best.values(), key=lambda b: (b[0], b[1].code))]

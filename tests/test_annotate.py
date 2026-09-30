@@ -118,7 +118,7 @@ def test_manifestation_codes_count_half(annotator):
     mention = annotator.annotate("pyelonephritis")[0]
     assert mention.best.code == "C0034186"                            # the UMLS concept, not N16 itself
     assert [l.code for l in mention.best.codes["ICD10CM"]] == ["N12", "N16"]   # N16 penalised, second
-    assert mention.candidates[1].code == "N16" and mention.candidates[1].score == 0.5
+    assert mention.candidates[1].code == "N16" and mention.candidates[1].score == 0.475   # half, and only a synonym
 
 
 def test_negation(annotator):

@@ -63,7 +63,7 @@ from pathlib import Path
 
 from medterms.db import Database
 from medterms.lexicon import CODE_SPEC, Lexicon, LexiconMatch
-from medterms.lookup import DEFAULT_CONFIDENCE, MANIFESTATION, MAPPING_RELATIONSHIPS
+from medterms.lookup import DEFAULT_CONFIDENCE, MANIFESTATION, MAPPING_RELATIONSHIPS, primary_sense
 from medterms.normalize import normalize_term
 
 VOCABULARIES = ("UMLS", "ICD10CM", "ICD9CM", "NS_MSI")
@@ -73,6 +73,7 @@ DOMAINS = ("condition", "symptom", "procedure", "observation")
 TERM_WEIGHT = {"preferred": 1.0, "clinical": 1.0, "lay": 0.9, "index": 0.8, "abbreviation": 0.7, "brand": 0.7}
 DOMAIN_WEIGHT = {"condition": 1.0, "symptom": 1.0, "procedure": 0.95, "observation": 0.85,
                  "drug": 0.8, "measurement": 0.8, "device": 0.7, "anatomy": 0.6, "other": 0.5}
+SECONDARY_SENSE = 0.95   # the term is only a synonym of this concept, not its name ("hip fracture" on Fracture of pelvis)
 UNLINKED = 0.8   # a concept that reaches no code is still worth showing, but after those that do
 SUPPRESS = "suppress"
 KEEP_UNLINKED = {"condition", "symptom"}   # other kinds of concept must reach a code to count ...
@@ -476,6 +477,8 @@ class Annotator:
                 score *= UNLINKED
             if vocab in CODE_VOCABULARIES and MANIFESTATION.search(name):
                 score *= 0.5
+            if not primary_sense(name, term):
+                score *= SECONDARY_SENSE
             if cid not in best or score > best[cid].score:
                 best[cid] = Candidate(cid, vocab, code, name, domain, term, term_type, round(score, 3))
         ranked = sorted(best.values(), key=lambda c: (-c.score, c.vocabulary != "UMLS", c.code))
