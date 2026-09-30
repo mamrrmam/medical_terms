@@ -143,7 +143,7 @@ def test_to_dict_and_evaluate(annotator, tmp_path, capsys):
     assert d["candidates"][0]["codes"]["ICD10CM"][0]["code"] == "I21.9"
 
     sentences = tmp_path / "s.csv"
-    sentences.write_text('text,expect,forbid\n# comment\n"hx of MI, now chest pain",MI=I21|410; chest pain=R07,\n'
+    sentences.write_text('text,expect,forbid\n# comment\n"MI last week, now chest pain",MI=I21|410; chest pain=R07,\n'
                          '"the patient said but",,patient; but\n"sudden headache",headache=*; stroke=I63,\n')
     result = evaluate(annotator, sentences)
     assert result == {"recall": 0.75, "forbidden": 0, "extras": 0}
@@ -242,3 +242,65 @@ def test_check_lexicon(with_lexicon):
 def test_without_lexicon(annotator):
     plain = Annotator(annotator.db, lexicon=False)
     assert plain.lexicon is None and plain.annotate("broke his wrist") == []
+
+
+# --- context: family, history, hypothetical, uncertain ----------------------------------
+
+@pytest.fixture
+def with_history_codes(annotator):
+    db = annotator.db
+    stroke = add(db, "UMLS", "C0038454", "Cerebrovascular accident", synonyms=[("stroke", "clinical")])
+    codes = {code: add(db, vocab, code, name, domain="observation" if code[0] in "ZV" else "condition")
+             for vocab, code, name in [
+                 ("ICD10CM", "I63.9", "Cerebral infarction, unspecified"),
+                 ("ICD10CM", "Z82.3", "Family history of stroke"),
+                 ("ICD9CM", "V17.1", "Family history of stroke (cerebrovascular)"),
+                 ("ICD10CM", "I25.2", "Old myocardial infarction"),
+                 ("ICD9CM", "412", "Old myocardial infarction"),
+                 ("ICD10CM", "Z82.49", "Family history of ischemic heart disease and other diseases of the circulatory system"),
+                 ("ICD10CM", "Z84.89", "Family history of other specified conditions"),
+                 ("ICD10CM", "Z86.79", "Personal history of other diseases of the circulatory system")]}
+    link(db, stroke, codes["I63.9"], 1.0)
+    db.commit()
+    return Annotator(db)
+
+
+def context(mentions):
+    return [(m.text, m.assertion, m.experiencer, m.temporality) for m in mentions]
+
+
+def test_family_and_history_switch_codes(with_history_codes):
+    a = with_history_codes
+    stroke, headache = a.annotate("Her mom had a stroke and she has a headache.")
+    assert (stroke.experiencer, headache.experiencer) == ("family", None)          # "she" ends mom's scope
+    assert [l.code for l in stroke.best.codes["ICD10CM"]] == ["Z82.3"]
+    assert [l.code for l in stroke.best.codes["ICD9CM"]] == ["V17.1"]
+    assert [l.code for l in stroke.condition_codes["ICD10CM"]] == ["I63.9"]         # the condition's own codes
+    assert stroke.cues == ["family: mom"]
+
+    mi = a.annotate("Hx of MI.")[0]
+    assert mi.temporality == "history"
+    assert {v: [l.code for l in ls] for v, ls in mi.best.codes.items()} == {"ICD10CM": ["I25.2"], "ICD9CM": ["412"]}
+    # a heart attack in a parent: from the curated table (I21 -> Z82.49), not findable by name
+    dad = a.annotate("Dad had an MI.")[0]
+    assert (dad.experiencer, dad.best.codes["ICD10CM"][0].code) == ("family", "Z82.49")
+    # no specific personal history code (Z86.79 is generic): keep the condition's codes
+    assert a.annotate("History of stroke two years ago.")[0].best.codes["ICD10CM"][0].code == "I63.9"
+
+
+def test_context_cues(with_history_codes):
+    a = with_history_codes
+    assert context(a.annotate("Call if you get a headache. Rule out MI. Stroke is possible.")) == [
+        ("headache", "hypothetical", None, None), ("MI", "uncertain", None, None), ("Stroke", "uncertain", None, None)]
+    assert context(a.annotate("Had a stroke in 2019. Headache as a child. Stroke runs in the family.")) == [
+        ("stroke", None, None, "history"), ("Headache", None, None, "history"), ("Stroke", None, "family", None)]
+    # negation wins over the rest and codes don't switch; children aren't relatives here
+    no_fh, son = a.annotate("No family history of MI. My son has a headache.")
+    assert (no_fh.text, no_fh.assertion, no_fh.experiencer) == ("MI", "negated", "family")
+    assert no_fh.condition_codes is None
+    assert (son.text, son.experiencer) == ("headache", None)
+    # "family history of" is a cue, not a mention ...
+    assert context(a.annotate("Family history of headache.")) == [("headache", None, "family", "history")]
+    # ... unless the whole phrase is a code's name: that code, negated
+    fh = a.annotate("No family history of stroke.")[0]
+    assert (fh.text, fh.assertion, fh.best.code) == ("family history of stroke", "negated", "V17.1")

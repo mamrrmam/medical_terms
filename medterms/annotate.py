@@ -46,11 +46,28 @@ billable codes ahead of categories unless a category is clearly the better match
 "unspecified" codes first among equals. Manifestation codes ("... in diseases classified
 elsewhere"), which ICD doesn't allow as a primary diagnosis, count half.
 
-`assertion` is "negated" when a negation cue governs the mention ("no fever", "denies shortness
+Context, in the style of ConText (NegEx extended), from cue words before or after a mention in
+the same clause:
+
+  assertion    "negated" ("no fever", "denies ...", "MI was ruled out"), "hypothetical" ("call if
+               you get a fever", "risk of"), "uncertain" ("possible", "rule out", "suspected")
+  experiencer  "family" ("mom had a stroke", "family history of", "runs in the family"); words
+               for children don't count, since the parent is often describing the patient
+  temporality  "history" ("history of", "hx", "s/p", "prior", "years ago", "in 2019")
+
+For a relative's or a past condition, the best candidate's ICD codes switch to the specific
+"Family history of ...", "Personal history of ..." or "Old ..." code: first from the curated table
+lexicon_data/context_codes.csv (a heart attack is under "ischemic heart disease"), else by name (stroke in a
+parent: Z82.3 / V17.1; history of breast cancer: Z85.3 / V10.3; history of MI: I25.2 / 412), with
+the condition's own codes kept in `condition_codes`. A relative's condition without a specific
+code gets the generic family history code (Z84.89 / V19.8). A past condition without a specific
+personal history code keeps its codes: "history of hypertension" means it is still there.
+
+The negation rules in detail: `assertion` is "negated" when a negation cue governs the mention ("no fever", "denies shortness
 of breath, palpitations, or syncope", "MI was ruled out"), in the style of NegEx: a cue before
 the mention reaches forward to the end of its clause (a full stop, semicolon, colon or "but"),
 at most 12 words; a cue right after it ("... ruled out", "... negative") reaches back 3 words.
-Otherwise it is None. History and family context ("mom had a stroke") aren't detected yet.
+
 
 Every candidate has a `key` such as "umls:C0027051" or "icd10cm:I21.9", and `node_id`
 gives the 16-byte blake3 hash Brain uses for content-addressed nodes (pip install blake3).
@@ -96,13 +113,57 @@ BRACKETED = re.compile(r"\([^)]*\)|\[[^]]*\]")
 NEGATION_BEFORE = {"no", "not", "dont", "doesnt", "didnt", "isnt", "wasnt", "arent", "werent", "hasnt", "havent",
                    "hadnt", "denies", "denied", "deny", "denying", "without", "negative for", "free of",
                    "never had", "no history of", "no evidence of", "no sign of", "no signs of", "absence of",
-                   "rules out", "ruled out", "rule out", "no complaints of", "nor", "never"}
+                   "ruled out", "no complaints of", "nor", "never"}
 NEGATION_AFTER = {"ruled out", "was ruled out", "is ruled out", "negative", "was negative", "is negative",
                   "absent", "not present"}
 PSEUDO_NEGATION = {"not only", "no change", "no increase", "no further", "not ruled out", "not rule out",
-                   "gram negative", "no longer sure"}
-SCOPE_END_WORDS = {"but", "however", "although", "though", "except", "yet", "aside", "apart"}
+                   "gram negative", "no longer sure", "cannot be ruled out", "cant be ruled out", "can not be ruled out"}
+HYPOTHETICAL_BEFORE = {"if", "in case", "in case of", "watch for", "monitor for", "look out for", "return if",
+                       "call if", "come back if", "in the event of", "risk of", "at risk for", "at risk of",
+                       "to prevent", "prevent", "prevention of", "to avoid"}
+UNCERTAIN_BEFORE = {"possible", "possibly", "probable", "probably", "likely", "suspected", "suspect", "suspicious for",
+                    "suspicion of", "concern for", "concerning for", "questionable", "rule out", "rules out",
+                    "to rule out", "r o", "may have", "might have", "could be", "maybe", "query", "consider",
+                    "differential includes", "versus", "vs"}
+UNCERTAIN_AFTER = {"not ruled out", "cannot be ruled out", "cant be ruled out", "can not be ruled out", "not excluded",
+                   "cannot be excluded", "is possible", "is suspected", "is likely", "suspected", "likely", "possible"}
+# Relatives. Children (son, daughter, baby, kid) are left out on purpose: in a pediatric visit the
+# parent is describing the patient ("my son has a peanut allergy").
+FAMILY_BEFORE = {"mom", "mother", "mothers", "mum", "dad", "father", "fathers", "parents", "parent", "brother",
+                 "brothers", "sister", "sisters", "sibling", "siblings", "grandmother", "grandfather", "grandma",
+                 "grandpa", "granny", "grandparents", "aunt", "aunts", "uncle", "uncles", "cousin", "cousins",
+                 "family history of", "family history", "family hx", "fhx", "fh", "relatives", "relative",
+                 "family member", "family members"}
+FAMILY_AFTER = {"runs in the family", "run in the family", "runs in her family", "runs in his family",
+                "runs in my family", "in the family", "in her family", "in his family", "in my family"}
+HISTORY_BEFORE = {"history of", "hx of", "hx", "h o", "pmh", "pmhx", "past medical history", "past medical history of",
+                  "past history of", "personal history of", "previous", "previously", "prior", "status post", "s p",
+                  "remote history of", "had a history of"}
+HISTORY_AFTER = {"years ago", "year ago", "months ago", "in the past", "as a child", "as a kid", "as a teenager",
+                 "when she was young", "when he was young", "when i was young", "resolved", "has resolved",
+                 "in remission"}
+# A contrast or a change of subject ends a cue's scope: "no fever but a cough", "possible kidney
+# infection, she has flank pain", "her mom had a stroke and she has asthma". Lists keep it going:
+# "denies shortness of breath, palpitations, or syncope".
+SCOPE_END_WORDS = {"but", "however", "although", "though", "except", "yet", "aside", "apart",
+                   "she", "he", "i", "patient", "pt", "we"}
+FAMILY_SCOPE_END = SCOPE_END_WORDS
 NEGATION_REACH, NEGATION_REACH_AFTER = 12, 3
+YEAR = re.compile(r"^(19|20)\d\d$")
+
+# (field, value, cues before, cues after, reach before, words ending the scope), in priority order:
+# a mention gets the first assertion that applies, and experiencer / temporality independently.
+CONTEXTS = [
+    ("assertion", "negated", NEGATION_BEFORE, NEGATION_AFTER, NEGATION_REACH, SCOPE_END_WORDS),
+    ("assertion", "hypothetical", HYPOTHETICAL_BEFORE, set(), 10, SCOPE_END_WORDS),
+    ("assertion", "uncertain", UNCERTAIN_BEFORE, UNCERTAIN_AFTER, 8, SCOPE_END_WORDS),
+    ("experiencer", "family", FAMILY_BEFORE, FAMILY_AFTER, 10, FAMILY_SCOPE_END),
+    ("temporality", "history", HISTORY_BEFORE, HISTORY_AFTER, NEGATION_REACH, SCOPE_END_WORDS),
+]
+FAMILY_FALLBACK = {"ICD10CM": "Z84.89", "ICD9CM": "V19.8"}
+GENERIC_WORDS = {"disease", "disorder", "condition", "syndrome", "infection", "injury", "pain", "other", "neoplasm",
+                 "malignant", "abnormality", "problem"}
+ALL_CUES = set().union(*(before | after for _, _, before, after, _, _ in CONTEXTS))   # family history of other specified conditions
 
 TOKEN = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")
 
@@ -168,7 +229,12 @@ class Mention:
     end: int
     text: str
     candidates: list[Candidate]
-    assertion: str | None = None   # reserved: negated / historical / family; not detected yet
+    assertion: str | None = None     # "negated", "hypothetical" or "uncertain"
+    experiencer: str | None = None   # "family" when it's a relative's condition
+    temporality: str | None = None   # "history" when it's past rather than current
+    cues: list[str] = field(default_factory=list)   # the context cues found, e.g. ["family: mom"]
+    condition_codes: dict[str, list[CodeLink]] | None = None   # the condition's own codes, when history /
+                                                               # family codes replaced them in best.codes
 
     @property
     def best(self) -> Candidate:
@@ -298,6 +364,8 @@ class Annotator:
             candidates = self._candidates(entries)
             if candidates and not any(self._keep(c) for c in candidates):
                 candidates = []
+            if candidates and _is_cue([tok[2] for tok in tokens[i:i + n]]):
+                candidates = []   # "family history of" is a context cue, not a finding
             if candidates:
                 if with_codes:
                     for cand in candidates:
@@ -305,7 +373,10 @@ class Annotator:
                 start, end = tokens[i][0], tokens[i + n - 1][1]
                 mentions.append((i, i + n - 1, Mention(start, end, text[start:end], candidates)))
             i += n
-        _mark_negation(tokens, mentions)
+        _mark_context(tokens, mentions)
+        if with_codes:
+            for _, _, mention in mentions:
+                self._context_codes(mention, codes_per_vocabulary)
         return [m for _, _, m in mentions]
 
     @staticmethod
@@ -340,6 +411,92 @@ class Annotator:
             return True
         return any(CLINICAL_WORD.search(w) and w not in NOT_CLINICAL
                    for w in normalize_term(f"{cand.name} {cand.matched_term}").split())
+
+    # -- history / family codes ------------------------------------------------------------
+
+    HISTORY_TITLE = re.compile(r"^(family history of|personal history of|old) (.+)$", re.I)
+    TITLE_TAIL = re.compile(r"\s*(\band other\b|\bor other\b|, not elsewhere classified|, NEC\b).*$", re.I)
+
+    def _history_index(self):
+        """kind ('family' / 'history') -> [(word key of the condition, vocab, code, name, billable)]."""
+        if getattr(self, "_history_codes", None) is None:
+            from medterms.linker import word_key
+
+            index = {"family": [], "history": []}
+            for vocab, code, name, billable in self.db.query(
+                    "SELECT vocabulary_id, code, name, is_billable FROM concept WHERE vocabulary_id IN ('ICD10CM', 'ICD9CM') "
+                    "AND (name LIKE 'Family history of %' OR name LIKE 'Personal history of %' OR name LIKE 'Old %') "
+                    "AND valid_end IS NULL"):
+                m = self.HISTORY_TITLE.match(name)
+                condition = self.TITLE_TAIL.sub("", m.group(2))
+                key = word_key(condition)
+                if key:
+                    kind = "family" if m.group(1).lower().startswith("family") else "history"
+                    index[kind].append((key, vocab, code, name, bool(billable)))
+            self._history_codes = index
+        return self._history_codes
+
+    def _curated_context_codes(self) -> list[tuple[str, str, dict[str, str]]]:
+        """(kind, ICD-10-CM prefix, {vocab: code}) rows from lexicon_data/context_codes.csv."""
+        if getattr(self, "_context_rows", None) is None:
+            from importlib import resources
+
+            path = Path(str(resources.files("medterms").joinpath("lexicon_data", "context_codes.csv")))
+            with open(path, newline="", encoding="utf-8") as f:
+                lines = [line for line in f if line.strip() and not line.startswith("#")]
+            self._context_rows = [(row["kind"], row["condition"].strip(),
+                                   {v: row[v.lower()].strip() for v in ("ICD10CM", "ICD9CM") if row.get(v.lower(), "").strip()})
+                                  for row in csv.DictReader(lines)]
+        return self._context_rows
+
+    def _context_codes(self, mention: "Mention", per_vocabulary: int) -> None:
+        """Swap in family / personal history codes for a relative's or a past condition."""
+        if mention.assertion == "negated":
+            return
+        kind = "family" if mention.experiencer == "family" else "history" if mention.temporality == "history" else None
+        if kind is None:
+            return
+        from medterms.linker import word_key
+
+        best = mention.best
+        sources = [best.name, best.matched_term, mention.text,
+                   *(links[0].name for links in best.codes.values() if links)]
+        keys = [k for k in (word_key(s) for s in sources) if k]
+        def fits(key, source, tier):
+            if tier == 0:
+                return key == source
+            if tier == 1:   # one word more or less, sharing two words or one specific word ("diabetes")
+                common = key & source
+                return (len(common) >= 2 or (len(common) == 1 and not common & GENERIC_WORDS)) and (
+                    (key < source and len(source - key) <= 1) or (source < key and len(key - source) <= 1))
+            # the history title contains the condition's name: "cerebral infarction" in
+            # "Personal history of transient ischemic attack (TIA), and cerebral infarction ..."
+            return len(source) >= 2 and source < key
+
+        found: dict[str, list[CodeLink]] = {}
+        own = [links[0].code for links in (best.codes.get("ICD10CM") or [],) if links]
+        curated = [row for row in self._curated_context_codes()
+                   if row[0] == kind and own and own[0].startswith(row[1])]
+        if curated:
+            _, _, codes = max(curated, key=lambda row: len(row[1]))
+            for vocab, code in codes.items():
+                if (cid := self._code_concept(f"{vocab.lower()}:{code}")) is not None:
+                    found[vocab] = [CodeLink(vocab, code, self.concepts[cid][2], True, 1.0)]
+        for tier, confidence in ((0, 1.0), (1, 0.8), (2, 0.7)):
+            for key, vocab, code, name, billable in self._history_index()[kind]:
+                if vocab in found:
+                    continue
+                if any(fits(key, source, tier) for source in keys):
+                    found[vocab] = [CodeLink(vocab, code, name, billable, confidence)]
+        if kind == "family":
+            for vocab, code in FAMILY_FALLBACK.items():
+                if vocab not in found and (cid := self._code_concept(f"{vocab.lower()}:{code}")) is not None:
+                    found[vocab] = [CodeLink(vocab, code, self.concepts[cid][2], True, 0.5)]
+        if not found:
+            return   # "history of hypertension": no personal history code, so it's the chronic condition itself
+        mention.condition_codes = best.codes
+        best.codes = {**{v: links for v, links in best.codes.items() if v not in CODE_VOCABULARIES or v == "NS_MSI"},
+                      **found}
 
     # -- lexicon ---------------------------------------------------------------------------
 
@@ -443,6 +600,10 @@ class Annotator:
                        if self._resolve_match(LexiconMatch(1, p, self.lexicon.parts[word]))]
             status = "UNRESOLVED" if not working else "ok"
             report.append(f"{status} {p.text!r}: {len(working)}/{len(words)} parts ({', '.join(working)})")
+        for kind, prefix, codes in self._curated_context_codes():
+            for vocab, code in codes.items():
+                if self._code_concept(f"{vocab.lower()}:{code}") is None:
+                    report.append(f"UNRESOLVED context_codes.csv {kind} {prefix}: {vocab} {code} is not in the database")
         return report
 
     def _conjunction_split(self, words: list[str]) -> int | None:
@@ -532,42 +693,59 @@ def _phrase_at(tokens, i: int, phrases: set[str], max_words: int = 4) -> int:
     return 0
 
 
-def _mark_negation(tokens, mentions) -> None:
-    """Set assertion = 'negated' on mentions governed by a negation cue (NegEx-style)."""
+def _is_cue(words: list[str]) -> bool:
+    """Whether these words are a context cue ("family history of", "no family history of")."""
+    phrase = " ".join(words)
+    return phrase in ALL_CUES or (len(words) > 1 and words[0] in ("no", "not") and " ".join(words[1:]) in ALL_CUES)
+
+
+def _mark_context(tokens, mentions) -> None:
+    """ConText-style: set assertion (negated / hypothetical / uncertain), experiencer (family)
+    and temporality (history) from cues before or after each mention, within its clause."""
     if not mentions:
         return
-    cues_before: list[int] = []   # token index where each cue's scope starts
     inside = {k for first, last, _ in mentions for k in range(first, last + 1)}   # "not eating" is a mention
-    i = 0
-    while i < len(tokens):
-        if i in inside:
-            i += 1
-            continue
-        if n := _phrase_at(tokens, i, PSEUDO_NEGATION):
-            i += n
-            continue
-        if n := _phrase_at(tokens, i, NEGATION_BEFORE):
-            cues_before.append(i + n)
-            i += n
-            continue
-        i += 1
-    for first, last, mention in mentions:
-        for scope_start in cues_before:
-            if scope_start > first or first - scope_start > NEGATION_REACH:
+    for field_name, value, before, after, reach, scope_end in CONTEXTS:
+        cues: list[tuple[int, str]] = []   # (token index where the scope starts, cue text)
+        i = 0
+        while i < len(tokens):
+            if i in inside:
+                i += 1
                 continue
-            # a clause break anywhere between the cue and the mention, or a "but" in between, ends the scope
-            blocked = (any(tokens[k][4] for k in range(scope_start, first + 1))
-                       or any(tokens[k][2] in SCOPE_END_WORDS for k in range(scope_start, first)))
-            if not blocked:
-                mention.assertion = "negated"
-                break
-        if mention.assertion is None:
-            for k in range(last + 1, min(last + 1 + NEGATION_REACH_AFTER, len(tokens))):
-                if tokens[k][4]:
-                    break
-                if _phrase_at(tokens, k, NEGATION_AFTER):
-                    mention.assertion = "negated"
-                    break
+            if value == "negated" and (n := _phrase_at(tokens, i, PSEUDO_NEGATION)):
+                i += n
+                continue
+            if n := _phrase_at(tokens, i, before):
+                cues.append((i + n, " ".join(tok[2] for tok in tokens[i:i + n])))
+                i += n
+                continue
+            i += 1
+        for first, last, mention in mentions:
+            if getattr(mention, field_name) is not None:
+                continue   # an earlier (higher priority) value already applies
+            found = None
+            for scope_start, cue in cues:
+                if scope_start > first or first - scope_start > reach:
+                    continue
+                # a clause break between cue and mention, or a scope-ending word, ends the scope
+                blocked = (any(tokens[k][4] for k in range(scope_start, first + 1))
+                           or any(tokens[k][2] in scope_end for k in range(scope_start, first)))
+                if not blocked:
+                    found = cue
+            if found is None:
+                for k in range(last + 1, min(last + 1 + NEGATION_REACH_AFTER + 1, len(tokens))):
+                    if tokens[k][4]:
+                        break
+                    if n := _phrase_at(tokens, k, after):
+                        found = " ".join(tok[2] for tok in tokens[k:k + n])
+                        break
+                    if (value == "history" and tokens[k][2] == "in" and k + 1 < len(tokens)
+                            and YEAR.match(tokens[k + 1][2]) and not tokens[k + 1][3]):
+                        found = f"in {tokens[k + 1][2]}"   # "had a stroke in 2019"
+                        break
+            if found is not None:
+                setattr(mention, field_name, value)
+                mention.cues.append(f"{value}: {found}")
 
 
 def _singular(key: str) -> str:
@@ -587,8 +765,10 @@ def evaluate(annotator: Annotator, path: Path, verbose: bool = False) -> dict[st
 
     expect: 'words=CODE|CODE; words=CODE' — each listed phrase must be found as (part of) a
             mention whose top candidates reach a code starting with one of the prefixes
-            (ICD-10-CM, ICD-9-CM or NS); '*' accepts any candidate. A phrase starting with '-'
-            must be tagged negated; any other must not be.
+            (ICD-10-CM, ICD-9-CM or NS); '*' accepts any candidate. Context goes in brackets:
+            'stroke[family]=Z82.3', 'MI[history]=I25.2', 'pneumonia[uncertain]=*'; '-phrase' is
+            short for 'phrase[negated]'. The mention's context must match exactly (for a negated
+            phrase, only the negation is checked).
     forbid: 'word; word' — phrases that must not be annotated.
     Mentions matching neither list are counted and listed as unreviewed extras.
     """
@@ -602,12 +782,19 @@ def evaluate(annotator: Annotator, path: Path, verbose: bool = False) -> dict[st
         for item in filter(None, (s.strip() for s in (row.get("expect") or "").split(";"))):
             phrase, _, want = item.partition("=")
             phrase, prefixes = phrase.strip().lower(), [p.strip() for p in want.split("|") if p.strip()]
-            negated = phrase.startswith("-")
-            phrase = phrase.lstrip("-").strip()
+            tags = set()
+            if phrase.startswith("-"):
+                tags.add("negated")
+                phrase = phrase[1:].strip()
+            if m_tags := re.search(r"\[([^]]*)\]\s*$", phrase):
+                tags |= {tag.strip() for tag in m_tags.group(1).split(",") if tag.strip()}
+                phrase = phrase[:m_tags.start()].strip()
             expected += 1
             hit = None
             for idx, m in enumerate(mentions):
-                if (phrase in m.text.lower() or m.text.lower() in phrase) and (m.assertion == "negated") == negated:
+                context = {c for c in (m.assertion, m.experiencer, m.temporality) if c}
+                same_context = ("negated" in context) if "negated" in tags else context == tags
+                if (phrase in m.text.lower() or m.text.lower() in phrase) and same_context:
                     codes = [l.code for c in m.candidates[:3] for links in c.codes.values() for l in links]
                     if not prefixes or prefixes == ["*"] or any(code.startswith(p) for code in codes for p in prefixes):
                         hit = idx
@@ -633,7 +820,8 @@ def evaluate(annotator: Annotator, path: Path, verbose: bool = False) -> dict[st
             print(row["text"])
             for m in mentions:
                 codes = "; ".join(f"{v} {links[0].code}" for v, links in m.best.codes.items() if links)
-                flag = f" <{m.assertion}>" if m.assertion else ""
+                context = ",".join(c for c in (m.assertion, m.experiencer, m.temporality) if c)
+                flag = f" <{context}>" if context else ""
                 print(f"   [{m.text}]{flag} {m.best.name} ({m.best.domain}, {m.best.score}) {codes}")
     recall = found / expected if expected else 1.0
     print(f"{len(rows)} texts: expected mentions found {found}/{expected} ({recall:.0%}); "

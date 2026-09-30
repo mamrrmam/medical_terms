@@ -179,19 +179,45 @@ It skips:
 
 "X and Y" splits into two mentions when both halves are terms.
 
-`mention.assertion` is `"negated"` when a negation cue governs the mention, NegEx-style: "no fever",
-"denies shortness of breath, palpitations, or syncope" (a cue reaches to the end of its clause, up to 12
-words), "MI was ruled out". History and family context ("mom had a stroke") aren't detected yet. After
-loading (2–5 s, ~250 MB), a 5,000-word transcript takes about 10 ms.
+Each mention also gets context, ConText-style (NegEx extended), from cue words in the same clause:
+
+| Field | Values | Cues, for example |
+|---|---|---|
+| `assertion` | `negated` / `hypothetical` / `uncertain` | "no", "denies X, Y, or Z", "was ruled out" / "call if", "risk of" / "possible", "rule out", "suspected" |
+| `experiencer` | `family` | "mom", "dad", "grandma", "family history of", "runs in the family" (not son / daughter / baby: in a pediatric visit the parent is describing the patient) |
+| `temporality` | `history` | "history of", "hx", "s/p", "prior", "years ago", "as a child", "in 2019" |
+
+A cue reaches to the end of its clause (up to 12 words; lists like "denies X, Y, or Z" included); a
+contrast or a new subject ends it ("possible kidney infection, **she** has flank pain").
+
+For a relative's or a past condition the codes change, because they are different codes:
+
+| Said | Codes |
+|---|---|
+| her mom had a stroke | Z82.3 / V17.1 family history of stroke |
+| dad had colon cancer and a heart attack | Z80.0 / V16.0, Z82.49 / V17.3 |
+| history of breast cancer | Z85.3 / V10.3 personal history of malignant neoplasm of breast |
+| hx of MI in 2019 | I25.2 / 412 old myocardial infarction |
+| had a stroke two years ago | Z86.73 / V12.54 |
+| history of hypertension | I10 / 401.9 unchanged: there's no personal history code, the condition is still there |
+
+The history code comes from `lexicon_data/context_codes.csv` (curated, for conditions filed under a
+broader heading: a heart attack under "ischemic heart disease") or else by name ("Family history of …",
+"Personal history of …", "Old …"). A relative's condition with no specific code gets the generic
+family history code (Z84.89 / V19.8). The condition's own codes stay in `mention.condition_codes`.
+Negated, hypothetical and uncertain mentions keep their codes and are only flagged: whether to bill a
+"rule out" diagnosis is the caller's decision. After loading (2–5 s, ~250 MB), a 5,000-word
+transcript takes about 10 ms.
 
 Candidates carry a canonical `key` ("umls:C0027051", "icd10cm:I21.9"), and with `pip install -e ".[brain]"`
 a `node_id`: the first 16 bytes of `blake3(key)`, the same content addressing Brain uses for graph nodes.
 
-`medterms annotate --evaluate eval/annotate_sentences.csv` (50 sentences) finds all 84 expected mentions,
-negation included, and tags none of 41 forbidden phrases. That is a development set: the rules and
+`medterms annotate --evaluate eval/annotate_sentences.csv` (57 sentences) finds all 93 expected mentions
+with the right context (negated, family, history, uncertain, hypothetical) and tags none of 41
+forbidden phrases. That is a development set: the rules and
 lexicon were written while looking at it, so it shows the current state, not accuracy on unseen text.
-Known gaps: genuinely ambiguous single words ("shot": injection or gunshot, tied), history and family
-context, and any everyday wording the lexicon doesn't cover yet.
+Known gaps: genuinely ambiguous words and abbreviations ("shot": injection or gunshot; "MS"; "CP"),
+and any everyday wording the lexicon doesn't cover yet.
 
 ### How a lay term reaches a code (example from the test data)
 
