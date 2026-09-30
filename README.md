@@ -29,6 +29,9 @@ medterms --db sqlite:///terms.db load fees --payer NS_MSI ns_fees.csv
 medterms --db sqlite:///terms.db link
 medterms --db sqlite:///terms.db lookup "heart attack" --to ICD10CM
 medterms --db sqlite:///terms.db evaluate eval/lay_terms.csv
+
+# Find concepts in running text
+medterms --db sqlite:///terms.db annotate "Hx of MI. Now has chest pain and is worried about another heart attack."
 ```
 
 Load ICD-10-CM and ICD-9-CM before UMLS: the UMLS loader links to existing ICD codes but never creates them.
@@ -50,12 +53,14 @@ iCloud skips, e.g. `uv venv .venv.nosync && ln -s .venv.nosync .venv`.
 | `medterms/loaders/icd9cm.py` | ICD-9-CM diagnoses and procedures, and the CMS GEMs in both directions |
 | `medterms/linker.py` | `medterms link`: approximate links from UMLS concepts to ICD-10-CM, ICD-9-CM and NS fee codes by name, and across the GEMs |
 | `medterms/lookup.py` | Term lookup ranked by link confidence, and `medterms evaluate` |
+| `medterms/annotate.py` | `medterms annotate`: find clinical concepts in running text (transcripts, dictation) and link them to codes |
+| `eval/annotate_sentences.csv` | 30 transcript-style sentences with the mentions each should yield and words that must not be tagged |
 | `eval/lay_terms.csv` | 61 everyday conditions with expected ICD-10-CM / ICD-9-CM code prefixes, and 15 procedures that should reach an NS fee code |
 | `medterms/loaders/fees.py` | Payer fee schedules, unit values and payer code lists from a normalized CSV |
 | `medterms/extract/` | PDF fee schedule and code list extractor, driven by a per-payer profile; writes the normalized CSV plus a report of lines it couldn't place |
 | `medterms/extract/bulletins.py` | Physician's Bulletin extractor: fee announcements as a dated change log (new, updated, terminated) |
 | `medterms/profiles/` | Extractor profiles: `ns_msi_fees`, `ns_msi_modifiers`, `ns_msi_explanatory`, `ns_msi_bulletins` |
-| `medterms/cli.py` | `medterms init / load / extract / link / lookup / evaluate` |
+| `medterms/cli.py` | `medterms init / load / extract / link / lookup / annotate / evaluate` |
 | `schema/example_seed.sql`, `schema/example_lookup.sql` | Hand-written rows showing how lay terms map to ranked ICD-10-CM candidates (load into an empty database only, because they use fixed ids) |
 | `tests/` | pytest suite, run against sample files written in each source's format; set `MEDTERMS_TEST_PG=postgresql://.../postgres` to run it on PostgreSQL too |
 
@@ -106,6 +111,38 @@ Diagnosis concepts link only to diagnosis codes and procedure concepts only to p
 
 The misses are mostly lay terms the vocabularies don't have ("broken arm", "morning sickness", "tubes tied",
 "cataract surgery"). Those need curated lay mappings, not more matching.
+
+### Annotating text
+
+```python
+from medterms.db import Database
+from medterms.annotate import Annotator
+
+annotator = Annotator(Database("sqlite:///terms.db"))   # loads ~470k terms once: a few seconds, ~250 MB
+for m in annotator.annotate("hx of MI, now c/o chest pain and she's always thirsty"):
+    print(m.start, m.end, m.text, m.best.name, m.best.key, m.best.codes["ICD10CM"][0].code)
+# 6 8 MI Myocardial Infarction umls:C0027051 I21.9
+# 18 28 chest pain Chest Pain umls:C0008031 R07.9
+# 39 53 always thirsty Polydipsia umls:C0085602 R63.1
+```
+
+The annotator scans for the longest run of words (up to 10) that matches a known term, using the
+same normalization as the database, and folds plurals ("heart attacks"). Each mention keeps up to
+five candidate concepts, best first ("MI" is Myocardial Infarction before Motivational
+Interviewing), each with its best ICD-10-CM, ICD-9-CM and NS fee codes. It skips concepts that aren't
+conditions, symptoms, procedures or findings ("patient", "daughter"), common conversational words
+that happen to be UMLS strings ("said", "but"), mentions that reach no code unless they are a
+condition or symptom, and abbreviations not written in capitals. "X and Y" splits into two mentions
+when both halves are terms. `mention.assertion` is reserved for negation and history; it isn't
+detected yet. A 5,000-word transcript takes about 10 ms.
+
+Candidates carry a canonical `key` ("umls:C0027051", "icd10cm:I21.9"), and with `pip install -e ".[brain]"`
+a `node_id`: the first 16 bytes of `blake3(key)`, the same content addressing Brain uses for graph nodes.
+
+`medterms annotate --evaluate eval/annotate_sentences.csv` currently finds 37 of 41 expected mentions
+(90%) and tags none of the 30 forbidden words. The misses: "broke his wrist", "quit smoking",
+"stomach ache" (UMLS files it under dyspepsia) and "ear infection" (the concept is found but links to
+no code).
 
 ### How a lay term reaches a code (example from the test data)
 

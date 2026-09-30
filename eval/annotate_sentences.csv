@@ -1,0 +1,32 @@
+text,expect,forbid
+# expect: "phrase=CODE|CODE; ..." (ICD-10-CM, ICD-9-CM or NS fee code prefixes; * = any concept). forbid: "word; ..." must not be tagged.
+"I've had this cough for about two weeks and now I'm running a fever",cough=R05|786.2; fever=R50|780.6,weeks
+"She said her chest pain started after dinner and went down her left arm",chest pain=R07|786.5,said; dinner; left
+"Past history of MI and high blood pressure, on metformin for type 2 diabetes",MI=I21|410; high blood pressure=I10|401; type 2 diabetes=E11|250,
+"He's been having headaches every morning and some blurry vision",headaches=R51|G44|784.0; blurry vision=H53|368,morning
+"My back has been killing me since I lifted the couch",,me; couch; since
+"The baby has had diarrhea and vomiting since yesterday",diarrhea=R19.7|787.91|K59.1|A09|009; vomiting=R11|787.0,yesterday
+"Mom has asthma and she uses her puffer twice a day",asthma=J45|493,day
+"I get heartburn after I eat spicy food",heartburn=R12|787.1,food
+"He broke his wrist playing hockey",broke his wrist=S62|S52|814|813,hockey
+"We did an appendectomy last spring",appendectomy=59|47,spring
+"She's due for a colonoscopy",colonoscopy=01.22|45.23,
+"Patient reports shortness of breath on exertion and swelling in both ankles",shortness of breath=R06|786.0; swelling=R60|782.3|M25.47|719.0,reports
+"Any dizziness or fainting spells?",dizziness=R42|780.4; fainting=R55|780.2,
+"He's feeling really down lately and not sleeping well",,really; well; lately
+"She had a C-section with her second child",C-section=86.1|74|O82,second; child
+"Kidney stones run in the family",kidney stones=N20|592,
+"I think I have pink eye, my eye is all crusty",pink eye=H10|372,think
+"Sore throat and swollen glands for three days",sore throat=J02|462|R07.0; swollen glands=R59|785.6,days
+"He had a stroke two years ago and has some weakness on the right side",stroke=I63|I64|434|436; weakness=R53|M62.81|780.79|728.87,right
+"She has a UTI, burning when she pees",UTI=N39.0|599.0,
+"Hx of COPD, quit smoking in 2010",COPD=J44|496; smoking=*,
+"The rash on her arm looks like eczema",rash=R21|782.1; eczema=L30|L20|692|691,looks
+"Knee replacement scheduled for March",knee replacement=93.41|93.47|81.54,march
+"Stomach ache and bloating after meals",stomach ache=R10|789.0; bloating=R14|787.3,meals
+"No known allergies, no history of cancer",allergies=*; cancer=*,
+"Well, I was wondering if I could get my prescription refilled",,well; wondering
+"She's been anxious and having panic attacks",anxious=F41|300.0|R45; panic attacks=F41.0|300.01,
+"The baby has an ear infection again",ear infection=H66|H65|382|381,again
+"I need a tetanus shot, I stepped on a nail",tetanus shot=*,need
+"Her sugars have been all over the place and she's always thirsty",thirsty=R63.1|783.5,place

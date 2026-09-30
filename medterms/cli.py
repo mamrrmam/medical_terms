@@ -9,6 +9,7 @@
   medterms load codes --db sqlite:///terms.db --vocabulary ON_OHIP_DX dx.csv --maps-to-vocabulary ICD9CM
   medterms link   --db sqlite:///terms.db
   medterms lookup --db sqlite:///terms.db "heart attack" --to ICD10CM
+  medterms annotate --db sqlite:///terms.db "hx of MI, now has chest pain"
   medterms extract ns_msi_fees Physicians-Manual.pdf -o ns_fees.csv --report ns_fees.md
   medterms extract ns_msi_bulletins Bulletins.pdf -o ns_bulletins.csv --compare ns_fees.csv
 """
@@ -80,6 +81,30 @@ def cmd_evaluate(args):
     evaluate(Database(args.db), Path(args.file), top=args.top, verbose=args.verbose)
 
 
+def cmd_annotate(args):
+    import json
+
+    from medterms.annotate import Annotator, evaluate
+
+    annotator = Annotator(Database(args.db))
+    if args.evaluate:
+        evaluate(annotator, Path(args.evaluate), verbose=args.verbose)
+        return
+    text = Path(args.file).read_text(encoding="utf-8") if args.file else (args.text or sys.stdin.read())
+    mentions = annotator.annotate(text)
+    if args.json:
+        print(json.dumps([m.to_dict() for m in mentions], indent=2))
+        return
+    for m in mentions:
+        best = m.best
+        codes = "; ".join(f"{v} {links[0].code}" for v, links in best.codes.items() if links)
+        others = ", ".join(c.name for c in m.candidates[1:3])
+        print(f"{m.start:5}-{m.end:<5} {m.text!r:28} {best.name} [{best.key}] {codes}"
+              + (f"   (also: {others})" if others else ""))
+    if not mentions:
+        print("no mentions", file=sys.stderr)
+
+
 def cmd_link(args):
     from medterms import linker
 
@@ -140,6 +165,14 @@ def main(argv=None):
     p = sub.add_parser("link", help="link UMLS concepts to ICD-10-CM, ICD-9-CM and NS fee codes by name (after loading)")
     p.add_argument("--targets", help=f"comma-separated target vocabularies (default: those loaded of {','.join(__import__('medterms.linker').linker.TARGETS)})")
     p.set_defaults(func=cmd_link)
+
+    p = sub.add_parser("annotate", help="find clinical concepts in text and link them to codes")
+    p.add_argument("text", nargs="?", help="text to annotate (or use --file, or pipe it on stdin)")
+    p.add_argument("--file", help="read the text from this file")
+    p.add_argument("--json", action="store_true", help="print mentions as JSON")
+    p.add_argument("--evaluate", metavar="CSV", help="score against a sentence set (text,expect,forbid)")
+    p.add_argument("-v", "--verbose", action="store_true", help="with --evaluate: print every mention")
+    p.set_defaults(func=cmd_annotate)
 
     p = sub.add_parser("evaluate", help="measure how well lay terms reach expected codes (CSV: term,icd10,icd9,ns)")
     p.add_argument("file")
