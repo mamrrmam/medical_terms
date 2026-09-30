@@ -57,3 +57,13 @@ text,expect,forbid
 "Call if you get a fever.",fever[hypothetical]=*,
 "Hx of MI in 2019.",MI[history]=I25.2|412,
 "No family history of cancer.",-cancer=*,
+"She got a shot in her arm.",shot=99.29,
+"He was shot in the leg.",shot=W34|E922,leg
+"The patient has MS with numbness and blurry vision.",MS=G35|340; numbness=R20|782.0,
+"Known MS, loud murmur on exam, echo ordered.",MS=I05|394,
+"Concern for PE, started on heparin.",PE[uncertain]=I26|415,
+"PE unremarkable, vitals stable.",PE=89.7,
+"He has CP and SOB, hx of HTN and DM.","CP=R07|786.5; SOB=R06|786.0; HTN[history]=I10|401; DM[history]=E11|250",
+"Left knee OA.",knee OA=M17|715,
+"Wrist fx after a fall.",wrist fx=S62|814; fall=*,
+"She has a cold and a cough.",cold=J00|460; cough=R05|786.2,

@@ -54,7 +54,7 @@ iCloud skips, e.g. `uv venv .venv.nosync && ln -s .venv.nosync .venv`.
 | `medterms/linker.py` | `medterms link`: approximate links from UMLS concepts to ICD-10-CM, ICD-9-CM and NS fee codes by name, and across the GEMs |
 | `medterms/lookup.py` | Term lookup ranked by link confidence, and `medterms evaluate` |
 | `medterms/annotate.py` | `medterms annotate`: find clinical concepts in running text (transcripts, dictation) and link them to codes |
-| `medterms/lexicon.py`, `medterms/lexicon_data/` | Curated lay lexicon: everyday phrases and body-part patterns ("can't put weight on it", "broke his wrist", "my knee hurts") mapped to terms or codes |
+| `medterms/lexicon.py`, `medterms/lexicon_data/` | Curated lay lexicon: everyday phrases, body-part patterns and clinical abbreviations (`patterns.csv`, `body_parts.csv`), sense cues for ambiguous terms (`senses.csv`), and family / personal history codes (`context_codes.csv`) |
 | `eval/annotate_sentences.csv` | 30 transcript-style sentences with the mentions each should yield and words that must not be tagged |
 | `eval/lay_terms.csv` | 61 everyday conditions with expected ICD-10-CM / ICD-9-CM code prefixes, and 15 procedures that should reach an NS fee code |
 | `medterms/loaders/fees.py` | Payer fee schedules, unit values and payer code lists from a normalized CSV |
@@ -206,18 +206,30 @@ broader heading: a heart attack under "ischemic heart disease") or else by name 
 "Personal history of …", "Old …"). A relative's condition with no specific code gets the generic
 family history code (Z84.89 / V19.8). The condition's own codes stay in `mention.condition_codes`.
 Negated, hypothetical and uncertain mentions keep their codes and are only flagged: whether to bill a
-"rule out" diagnosis is the caller's decision. After loading (2–5 s, ~250 MB), a 5,000-word
-transcript takes about 10 ms.
+"rule out" diagnosis is the caller's decision.
+
+**Ambiguous words and abbreviations.** Clinical abbreviations in the lexicon match only in capitals and
+take their usual sense in clinical speech (CP → chest pain, SOB, HTN, DM / T2DM, CAD, CHF, OSA, PNA,
+LBP, "high BP" → hypertension, "knee OA", "wrist fx"). Everyday wording settles most of "shot" ("got a
+shot in her arm" → injection, "was shot" → gunshot wound). When a mention's top candidates still mean
+different things, `lexicon_data/senses.csv` lists cue words for each sense, looked for anywhere else in
+the text: "MS" with "numbness", "vision" → multiple sclerosis, with "murmur", "echo" → mitral stenosis;
+"PE" with "heparin" → pulmonary embolism, with "vitals", "unremarkable" → physical examination. Without
+cue words, the candidate whose ICD-10 chapter the other mentions share wins; otherwise the mention is
+flagged `ambiguous` with its best guess first, and `annotate(ambiguous="drop")` leaves such mentions out.
+The sense chosen and why is in `mention.cues`.
+
+After loading (2–5 s, ~250 MB), a 5,000-word transcript takes about 0.1–0.2 s.
 
 Candidates carry a canonical `key` ("umls:C0027051", "icd10cm:I21.9"), and with `pip install -e ".[brain]"`
 a `node_id`: the first 16 bytes of `blake3(key)`, the same content addressing Brain uses for graph nodes.
 
-`medterms annotate --evaluate eval/annotate_sentences.csv` (57 sentences) finds all 93 expected mentions
-with the right context (negated, family, history, uncertain, hypothetical) and tags none of 41
-forbidden phrases. That is a development set: the rules and
+`medterms annotate --evaluate eval/annotate_sentences.csv` (67 sentences) finds all 109 expected mentions
+with the right context (negated, family, history, uncertain, hypothetical) and sense, and tags none of
+42 forbidden phrases. That is a development set: the rules and
 lexicon were written while looking at it, so it shows the current state, not accuracy on unseen text.
-Known gaps: genuinely ambiguous words and abbreviations ("shot": injection or gunshot; "MS"; "CP"),
-and any everyday wording the lexicon doesn't cover yet.
+Known gaps: ambiguity with no cue words or chapter overlap (flagged, not resolved), lower-case
+abbreviations ("cp and sob" is left alone), and any everyday wording the lexicon doesn't cover yet.
 
 ### How a lay term reaches a code (example from the test data)
 

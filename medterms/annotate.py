@@ -46,6 +46,12 @@ billable codes ahead of categories unless a category is clearly the better match
 "unspecified" codes first among equals. Manifestation codes ("... in diseases classified
 elsewhere"), which ICD doesn't allow as a primary diagnosis, count half.
 
+Ambiguity: when the top candidates mean different things ("MS": multiple sclerosis or mitral
+stenosis), cue words from lexicon_data/senses.csv anywhere else in the text pick the sense
+("numbness", "vision" vs "murmur", "valve"); failing that, the candidate whose ICD-10 chapter the
+other mentions share wins; failing that, `mention.ambiguous` is True (annotate(ambiguous="drop")
+leaves such mentions out). The sense chosen is recorded in `cues`.
+
 Context, in the style of ConText (NegEx extended), from cue words before or after a mention in
 the same clause:
 
@@ -93,6 +99,7 @@ DOMAIN_WEIGHT = {"condition": 1.0, "symptom": 1.0, "procedure": 0.95, "observati
 SECONDARY_SENSE = 0.95   # the term is only a synonym of this concept, not its name ("hip fracture" on Fracture of pelvis)
 UNLINKED = 0.8   # a concept that reaches no code is still worth showing, but after those that do
 SUPPRESS = "suppress"
+TIE = 0.1   # candidates this close in score count as tied
 KEEP_UNLINKED = {"condition", "symptom"}   # other kinds of concept must reach a code to count ...
 # ... unless their name has a clinical word in it ("Mastectomy", "Chemotherapy"), which "Reporting",
 # "Placement - action" and "Protocol Treatment Arm" don't
@@ -233,6 +240,7 @@ class Mention:
     experiencer: str | None = None   # "family" when it's a relative's condition
     temporality: str | None = None   # "history" when it's past rather than current
     cues: list[str] = field(default_factory=list)   # the context cues found, e.g. ["family: mom"]
+    ambiguous: bool = False          # top candidates mean different things and nothing in the text decided
     condition_codes: dict[str, list[CodeLink]] | None = None   # the condition's own codes, when history /
                                                                # family codes replaced them in best.codes
 
@@ -256,6 +264,7 @@ class Annotator:
         self.db = db
         self.lexicon = Lexicon.load() if lexicon is True else (lexicon or None)
         self._resolved: dict[str, tuple | None] = {}
+        self._history_memo: dict[tuple, dict] = {}
         self.domains = set(domains)
         self.max_words = max_words
         self.max_candidates = max_candidates
@@ -267,7 +276,8 @@ class Annotator:
         self.concepts: dict[int, tuple[str, str, str, str]] = {}
         for cid, vocab, code, name, domain in db.query(
                 f"SELECT concept_id, vocabulary_id, code, name, domain FROM concept "
-                f"WHERE vocabulary_id IN ({marks}) AND domain IN ({dom_marks}) AND valid_end IS NULL",
+                f"WHERE vocabulary_id IN ({marks}) AND domain IN ({dom_marks}) AND valid_end IS NULL "
+                f"AND COALESCE(concept_class, '') NOT IN ('chapter', 'block')",   # ranges (M15-M19) aren't codes
                 [*vocab_list, *self.domains]):
             self.concepts[cid] = (vocab, code, name, domain)
 
@@ -276,7 +286,8 @@ class Annotator:
         for cid, term, norm, term_type in db.query(
                 f"SELECT s.concept_id, s.term, s.term_normalized, s.term_type FROM concept_synonym s "
                 f"JOIN concept c ON c.concept_id = s.concept_id "
-                f"WHERE c.vocabulary_id IN ({marks}) AND c.domain IN ({dom_marks}) AND c.valid_end IS NULL",
+                f"WHERE c.vocabulary_id IN ({marks}) AND c.domain IN ({dom_marks}) AND c.valid_end IS NULL "
+                f"AND COALESCE(c.concept_class, '') NOT IN ('chapter', 'block')",
                 [*vocab_list, *self.domains]):
             if not self._usable(norm):
                 continue
@@ -302,6 +313,9 @@ class Annotator:
             f"AND s.term_type IN ('preferred', 'clinical') AND s.term_normalized NOT LIKE '% %'",
             list(self.domains))}
 
+        # words a dictionary term can start with (a cheap check before trying any window)
+        self.first_words = {key.split(" ", 1)[0] for key in self.terms}
+
         # concepts that reach at least one code
         code_marks = ",".join("?" * len(CODE_VOCABULARIES))
         hops = ",".join("?" * len(MAPPING_RELATIONSHIPS))
@@ -323,14 +337,21 @@ class Annotator:
     # -- matching ------------------------------------------------------------------------
 
     def annotate(self, text: str, with_codes: bool = True, codes_per_vocabulary: int = 3,
-                 min_confidence: float = MIN_CODE_CONFIDENCE) -> list[Mention]:
+                 min_confidence: float = MIN_CODE_CONFIDENCE, ambiguous: str = "keep") -> list[Mention]:
+        """Mentions in `text`, in order. ambiguous: "keep" leaves unresolved ambiguous mentions in,
+        flagged, with their best guess first; "drop" leaves them out."""
+        if ambiguous not in ("keep", "drop"):
+            raise ValueError("ambiguous must be 'keep' or 'drop'")
         tokens = self._tokens(text)
         mentions: list[tuple[int, int, Mention]] = []   # (first token, last token, mention)
         i = 0
         while i < len(tokens):
-            lex = self.lexicon.match(tokens, i) if self.lexicon else None
+            lex = self.lexicon.match(tokens, i, text) if self.lexicon else None
             found = None
-            for n in range(min(self.max_words, len(tokens) - i), 0, -1):
+            word = tokens[i][2]
+            can_start = (word in self.first_words or NUMBER_WORDS.get(word) in self.first_words
+                         or word in ARTICLES or _singular(word) in self.first_words)
+            for n in range(min(self.max_words, len(tokens) - i) if can_start else 0, 0, -1):
                 if any(tokens[k][3] for k in range(i + 1, i + n)):
                     continue   # would span punctuation
                 words = [tok[2] for tok in tokens[i:i + n]]
@@ -374,10 +395,11 @@ class Annotator:
                 mentions.append((i, i + n - 1, Mention(start, end, text[start:end], candidates)))
             i += n
         _mark_context(tokens, mentions)
+        self._disambiguate(tokens, mentions, codes_per_vocabulary, min_confidence, with_codes)
         if with_codes:
             for _, _, mention in mentions:
                 self._context_codes(mention, codes_per_vocabulary)
-        return [m for _, _, m in mentions]
+        return [m for _, _, m in mentions if not (ambiguous == "drop" and m.ambiguous)]
 
     @staticmethod
     def _tokens(text: str) -> list[tuple[int, int, str, bool, bool]]:
@@ -411,6 +433,66 @@ class Annotator:
             return True
         return any(CLINICAL_WORD.search(w) and w not in NOT_CLINICAL
                    for w in normalize_term(f"{cand.name} {cand.matched_term}").split())
+
+    # -- ambiguity -------------------------------------------------------------------------
+
+    def _disambiguate(self, tokens, mentions, per_vocabulary: int, min_confidence: float, with_codes: bool) -> None:
+        """Pick a sense for mentions whose top candidates mean different things: first by the
+        cue words for the term in senses.csv appearing elsewhere in the text, then by which
+        candidate's ICD-10 chapter the other mentions share; otherwise flag the mention."""
+        from medterms.linker import word_key
+
+        def ngrams(skip: range) -> set[str]:
+            words = [tok[2] for k, tok in enumerate(tokens) if k not in skip]
+            return {" ".join(words[i:i + n]) for n in (1, 2, 3) for i in range(len(words) - n + 1)}
+
+        def distinct(a: "Candidate", b: "Candidate") -> bool:
+            return word_key(a.name) != word_key(b.name) and _chapter(a) != _chapter(b)
+
+        settled = [m for _, _, m in mentions]
+        for first, last, mention in mentions:
+            senses = self.lexicon.senses.get(normalize_term(mention.text)) if self.lexicon else None
+            options = mention.candidates
+            if senses:
+                context = ngrams(range(first, last + 1))
+                scored = []
+                for target, cues in senses:
+                    if target not in self._resolved:
+                        self._resolved[target] = self._resolve(target)
+                    resolved = self._resolved[target]
+                    if resolved and resolved != SUPPRESS:
+                        scored.append(([c for c in cues if c in context], resolved))
+                hits = sorted(scored, key=lambda s: -len(s[0]))
+                if hits and hits[0][0] and (len(hits) == 1 or len(hits[0][0]) > len(hits[1][0])):
+                    self._put_first(mention, hits[0][1], per_vocabulary, min_confidence, with_codes)
+                    mention.cues.append(f"sense: {', '.join(hits[0][0])}")
+                    continue
+                options = [self._copy_first(resolved, per_vocabulary, min_confidence, with_codes)
+                           for _, resolved in scored]
+            elif not (len(options) > 1 and options[1].score >= options[0].score - TIE and distinct(options[0], options[1])):
+                continue
+            # no sense cues: which option shares an ICD-10 chapter with the other mentions?
+            others = [_chapter(m.best) for m in settled if m is not mention and not m.ambiguous]
+            support = sorted(((sum(1 for ch in others if ch and ch == _chapter(c)), i) for i, c in enumerate(options[:2])),
+                             reverse=True)
+            if len(support) > 1 and support[0][0] > support[1][0]:
+                winner = options[support[0][1]]
+                mention.candidates = [winner, *[c for c in mention.candidates if c.concept_id != winner.concept_id]]
+                mention.cues.append(f"sense: context ({_chapter(winner)})")
+            else:
+                mention.ambiguous = True
+
+    def _copy_first(self, resolved, per_vocabulary, min_confidence, with_codes) -> "Candidate":
+        candidates, extras = resolved
+        cand = Candidate(**{**candidates[0].__dict__, "codes": {}})
+        if with_codes:
+            cand.codes = self._with_extra_codes(self.codes(cand.concept_id, per_vocabulary, min_confidence), extras)
+        return cand
+
+    def _put_first(self, mention, resolved, per_vocabulary, min_confidence, with_codes) -> None:
+        cand = self._copy_first(resolved, per_vocabulary, min_confidence, with_codes)
+        cand.matched_term = mention.text
+        mention.candidates = [cand, *[c for c in mention.candidates if c.concept_id != cand.concept_id]][:self.max_candidates]
 
     # -- history / family codes ------------------------------------------------------------
 
@@ -482,12 +564,17 @@ class Annotator:
             for vocab, code in codes.items():
                 if (cid := self._code_concept(f"{vocab.lower()}:{code}")) is not None:
                     found[vocab] = [CodeLink(vocab, code, self.concepts[cid][2], True, 1.0)]
-        for tier, confidence in ((0, 1.0), (1, 0.8), (2, 0.7)):
-            for key, vocab, code, name, billable in self._history_index()[kind]:
-                if vocab in found:
-                    continue
-                if any(fits(key, source, tier) for source in keys):
-                    found[vocab] = [CodeLink(vocab, code, name, billable, confidence)]
+        # by name, remembered per condition: the same conditions come up again and again
+        memo_key = (kind, tuple(sorted(tuple(sorted(k)) for k in keys)))
+        if memo_key not in self._history_memo:
+            by_name: dict[str, list[CodeLink]] = {}
+            for tier, confidence in ((0, 1.0), (1, 0.8), (2, 0.7)):
+                for key, vocab, code, name, billable in self._history_index()[kind]:
+                    if vocab not in by_name and any(fits(key, source, tier) for source in keys):
+                        by_name[vocab] = [CodeLink(vocab, code, name, billable, confidence)]
+            self._history_memo[memo_key] = by_name
+        for vocab, links in self._history_memo[memo_key].items():
+            found.setdefault(vocab, links)
         if kind == "family":
             for vocab, code in FAMILY_FALLBACK.items():
                 if vocab not in found and (cid := self._code_concept(f"{vocab.lower()}:{code}")) is not None:
@@ -682,15 +769,42 @@ class Annotator:
         return out
 
 
+_FIRST_WORDS: dict[int, set[str]] = {}
+
+
 def _phrase_at(tokens, i: int, phrases: set[str], max_words: int = 4) -> int:
     """Length in words of the longest phrase from `phrases` starting at token i (0 if none);
     a phrase can't run across punctuation."""
+    first = _FIRST_WORDS.get(id(phrases))
+    if first is None:
+        first = _FIRST_WORDS[id(phrases)] = {p.split(" ", 1)[0] for p in phrases}
+    if tokens[i][2] not in first:
+        return 0
     for n in range(min(max_words, len(tokens) - i), 0, -1):
         if any(tokens[k][3] for k in range(i + 1, i + n)):
             continue
         if " ".join(tok[2] for tok in tokens[i:i + n]) in phrases:
             return n
     return 0
+
+
+def _chapter(cand: "Candidate") -> str | None:
+    """ICD-10-CM chapter of a candidate's best ICD-10-CM code ("9" for I21.9), "procedure" for a
+    procedure with no ICD-10-CM code, else None."""
+    links = cand.codes.get("ICD10CM") or ([] if cand.vocabulary != "ICD10CM" else
+                                          [CodeLink("ICD10CM", cand.code, cand.name, True, 1.0)])
+    if not links:
+        return "procedure" if cand.domain == "procedure" else None
+    code = links[0].code
+    letter, digits = code[0], code[1:3]
+    number = int(digits) if digits.isdigit() else 0
+    if letter == "D":
+        return "2" if number < 50 else "3"
+    if letter == "H":
+        return "7" if number < 60 else "8"
+    return {"A": "1", "B": "1", "C": "2", "E": "4", "F": "5", "G": "6", "I": "9", "J": "10", "K": "11", "L": "12",
+            "M": "13", "N": "14", "O": "15", "P": "16", "Q": "17", "R": "18", "S": "19", "T": "19", "V": "20",
+            "W": "20", "X": "20", "Y": "20", "Z": "21"}.get(letter)
 
 
 def _is_cue(words: list[str]) -> bool:

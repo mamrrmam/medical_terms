@@ -304,3 +304,59 @@ def test_context_cues(with_history_codes):
     # ... unless the whole phrase is a code's name: that code, negated
     fh = a.annotate("No family history of stroke.")[0]
     assert (fh.text, fh.assertion, fh.best.code) == ("family history of stroke", "negated", "V17.1")
+
+
+# --- ambiguity: capitals-only abbreviations, senses, chapter vote, flag ----------------------
+
+SENSE_PATTERNS = """pattern,targets,note,case
+CP,chest pain,,upper
+MS,multiple sclerosis|mitral stenosis,,upper
+"""
+SENSES = """term,target,cues
+ms,multiple sclerosis,numbness|vision
+ms,mitral stenosis,murmur|echo
+"""
+
+
+@pytest.fixture
+def with_senses(annotator, tmp_path):
+    db = annotator.db
+    for cui, name, vocab_code, code_name in [
+            ("C0026769", "Multiple sclerosis", "G35", "Multiple sclerosis"),
+            ("C0026269", "Mitral stenosis", "I05.0", "Rheumatic mitral stenosis"),
+            ("C0028643", "Numbness", "R20.0", "Anesthesia of skin"),
+            ("C0018808", "Heart murmur", "R01.1", "Cardiac murmur, unspecified")]:
+        cid = add(db, "UMLS", cui, name, domain="condition")
+        link(db, cid, add(db, "ICD10CM", vocab_code, code_name), 1.0)
+    db.commit()
+    (tmp_path / "p.csv").write_text(SENSE_PATTERNS)
+    (tmp_path / "parts.csv").write_text("word,part,adjective,pain\n")
+    (tmp_path / "s.csv").write_text(SENSES)
+    return Annotator(db, lexicon=Lexicon.load(tmp_path / "p.csv", tmp_path / "parts.csv", tmp_path / "s.csv"))
+
+
+def best(mentions):
+    return [(m.text, m.best.name, m.ambiguous) for m in mentions]
+
+
+def test_upper_case_patterns(with_senses):
+    assert best(with_senses.annotate("CP since morning")) == [("CP", "Chest Pain", False)]
+    assert with_senses.annotate("cp since morning") == []
+
+
+def test_senses_pick_by_cue_words(with_senses):
+    ms = with_senses.annotate("Known MS with numbness in both legs.")[0]
+    assert (ms.best.name, ms.ambiguous, ms.cues) == ("Multiple sclerosis", False, ["sense: numbness"])
+    assert with_senses.annotate("MS, soft murmur heard.")[0].best.name == "Mitral stenosis"
+
+
+def test_chapter_vote_then_flag(with_senses):
+    # no cue words: MI (chapter 9, circulatory) tips MS toward mitral stenosis (I05)
+    ms = with_senses.annotate("MS and an old MI.")[0]
+    assert (ms.best.name, ms.ambiguous) == ("Mitral stenosis", False)
+    assert ms.cues == ["sense: context (9)"]
+    # nothing to go on: flagged, best guess kept first ...
+    flagged = with_senses.annotate("The patient has MS.")[0]
+    assert flagged.ambiguous and flagged.best.name in ("Multiple sclerosis", "Mitral stenosis")
+    # ... or left out
+    assert with_senses.annotate("The patient has MS.", ambiguous="drop") == []

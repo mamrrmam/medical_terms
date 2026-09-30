@@ -1,4 +1,4 @@
-pattern,targets,note
+pattern,targets,note,case
 # Curated lay phrases and patterns, checked before the dictionary; a pattern wins over a
 # dictionary match of the same length. See medterms/lexicon.py for the syntax.
 #
@@ -8,6 +8,7 @@ pattern,targets,note
 # targets: all are tried; the one reaching the most code sets (ICD-10-CM, ICD-9-CM, NS) wins, earlier first on ties. A term (looked up in the dictionary, with
 #   {part} {adj} {pain} filled in from the body part), or a code "vocab:code". Add codes to the
 #   same candidate with "+": "icd10cm:Z87.891+icd9cm:V15.82". "-" suppresses the phrase.
+# case: "upper" to match only when written in capitals (abbreviations: "CP" yes, "cp" no).
 #
 # --- limb function
 [cant|cannot|can not|couldnt|could not|unable to|not able to] [put|bear] [any|much]? weight [on it|on <det> <part>|on]?,difficulty walking,"unable to bear weight, usually a leg or foot injury: R26.2 / 719.7"
@@ -58,3 +59,42 @@ sore <part>,{pain}|{adj} pain|{part} pain|pain in {part}|pain {part},
 <part> [is|was|got|has been]? [swollen|puffy|puffed up|swelled up|swelling],swelling {part}|swelling of {part}|effusion joint {part}|{part} swelling,
 [swollen|puffy] <part>,swelling {part}|swelling of {part}|effusion joint {part}|{part} swelling,
 swelling in <det> <part>,swelling {part}|swelling of {part}|effusion joint {part}|{part} swelling,
+# --- "shot": the noun after a/the/her is an injection; the verb is a gunshot
+[got|get|getting|had|have|has|need|needs|needed|give|gave|given|giving|due for|want|wants|receive|received] [a|the|her|his|my|your|their|another|this|that|one] shot,icd9cm:99.29,injection,
+[got|get|getting|had|have|has|need|needs|needed|give|gave|given|giving|due for|want|wants|receive|received] [a|the|her|his|my|your|their|another|this|that|one] shot in <det> <part>,icd9cm:99.29,injection,
+[b12|cortisone|steroid|allergy|pain] shot,icd9cm:99.29,injection,
+[was|been|got|get|getting|being] shot,gunshot wound,,
+[gunshot|gun shot] [wound]?,gunshot wound,,
+# --- common cold
+[have|has|had|got|caught|getting|catching|fighting] [a|the|this] cold,common cold,,
+# --- clinical abbreviations, in capitals only, with their usual sense in clinical speech
+CP,chest pain,"not cerebral palsy, the dictionary's first sense",upper
+SOB,shortness of breath,,upper
+[SOBOE|DOE],dyspnea on exertion,,upper
+HA,headache,,upper
+N V,nausea and vomiting,written N/V,upper
+HTN,hypertension,,upper
+[DM|DM2|T2DM|DMII|NIDDM],type 2 diabetes,,upper
+[T1DM|DM1|IDDM],type 1 diabetes,,upper
+CAD,coronary artery disease,,upper
+CHF,congestive heart failure,,upper
+[AF|AFIB],atrial fibrillation,,upper
+afib,atrial fibrillation,,
+URI,upper respiratory infection,,upper
+GERD,gastroesophageal reflux disease,,upper
+OA,osteoarthritis,,upper
+RA,rheumatoid arthritis,"not right atrium",upper
+LBP,low back pain,,upper
+[MVA|MVC],motor vehicle accident,,upper
+SI,suicidal ideation,,upper
+OSA,obstructive sleep apnea,,upper
+PNA,pneumonia,,upper
+LOC,loss of consciousness,,upper
+BPH,benign prostatic hyperplasia,,upper
+[high|elevated|raised] [BP|blood pressure],hypertension,,
+low [BP|blood pressure],hypotension,,
+<part> fx,fracture of {part}|{part} fracture|fracture {part},"fx = fracture",
+# --- abbreviations with more than one sense: every sense is a target; senses.csv picks by context
+MS,multiple sclerosis|mitral stenosis,see senses.csv,upper
+PE,pulmonary embolism|physical examination,see senses.csv,upper
+<part> OA,osteoarthritis of {part}|{part} osteoarthritis|osteoarthritis {part},,

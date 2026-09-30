@@ -15,6 +15,11 @@ Pattern syntax (patterns.csv):
   <det>            up to three of my/his/her/their/the/left/right/both/...
   <obj>            me/him/her/them/you/us
 
+A "case" column of "upper" makes a line match only when written in capitals ("CP", not "cp").
+
+senses.csv lists terms with more than one common meaning ("MS", "PE", "shot") and, per sense,
+cue words that point to it when they appear elsewhere in the text; see Annotator._disambiguate.
+
 Targets: '|'-separated; each that resolves becomes a candidate, and the one reaching the most
 code sets (ICD-10-CM, ICD-9-CM, NS) comes first, earlier targets winning ties. Each is a term looked up
 in the dictionary, with {part}, {adj} and {pain} filled in from the matched body part (a target
@@ -52,6 +57,7 @@ class Pattern:
     targets: str
     note: str
     sequence: tuple    # one expansion: ("w", word) / ("slot", name) items
+    upper: bool = False  # matches only when written in capitals
 
 
 @dataclass
@@ -134,23 +140,31 @@ class Lexicon:
     def __init__(self, patterns: list[Pattern], parts: dict[str, BodyPart]):
         self.patterns = patterns
         self.parts = parts
+        self.senses: dict[str, list[tuple[str, list[str]]]] = {}   # term -> [(target, cue words)]
         self.by_word: dict[str, list[Pattern]] = {}
-        self.by_slot: list[Pattern] = []
+        self.by_part: list[Pattern] = []    # patterns starting with <part>: tried only where a part word starts
+        self.by_slot: list[Pattern] = []    # patterns starting with another slot: tried everywhere
+        self.part_first_words = {key.split()[0] for key in parts}
         for p in patterns:
             if not p.sequence:
                 continue
             kind, value = p.sequence[0]
             if kind == "w":
                 self.by_word.setdefault(value, []).append(p)
+            elif value == "part":
+                self.by_part.append(p)
             else:
                 self.by_slot.append(p)
 
     @classmethod
-    def load(cls, patterns_path: Path | None = None, parts_path: Path | None = None) -> "Lexicon":
+    def load(cls, patterns_path: Path | None = None, parts_path: Path | None = None,
+             senses_path: Path | None = None) -> "Lexicon":
         """The bundled lexicon, or the files given."""
         base = resources.files("medterms").joinpath("lexicon_data")
         patterns_path = patterns_path or Path(str(base.joinpath("patterns.csv")))
         parts_path = parts_path or Path(str(base.joinpath("body_parts.csv")))
+        default_senses = Path(str(base.joinpath("senses.csv")))
+        senses_path = senses_path or (default_senses if patterns_path == Path(str(base.joinpath("patterns.csv"))) else None)
         parts = {}
         for row in _rows(parts_path):
             parts[normalize_term(row["word"])] = BodyPart(row["part"].strip(), (row.get("adjective") or "").strip(),
@@ -159,15 +173,27 @@ class Lexicon:
         for row in _rows(patterns_path):
             text = row["pattern"].strip()
             for seq in dict.fromkeys(expand(text)):
-                patterns.append(Pattern(text, (row.get("targets") or "").strip(), (row.get("note") or "").strip(), seq))
-        return cls(patterns, parts)
+                patterns.append(Pattern(text, (row.get("targets") or "").strip(), (row.get("note") or "").strip(), seq,
+                                        (row.get("case") or "").strip().lower() == "upper"))
+        lexicon = cls(patterns, parts)
+        if senses_path is not None and Path(senses_path).exists():
+            for row in _rows(Path(senses_path)):
+                cues = [normalize_term(c) for c in row["cues"].split("|") if normalize_term(c)]
+                lexicon.senses.setdefault(normalize_term(row["term"]), []).append((row["target"].strip(), cues))
+        return lexicon
 
-    def match(self, tokens, i: int) -> LexiconMatch | None:
+    def match(self, tokens, i: int, text: str | None = None) -> LexiconMatch | None:
         """Longest pattern match starting at token i (earlier lines win ties); tokens are the
-        annotator's (start, end, normalized word, punctuation before, clause end before)."""
+        annotator's (start, end, normalized word, punctuation before, clause end before). With
+        `text`, patterns marked upper-case only match capitals."""
         best = None
-        for p in itertools.chain(self.by_word.get(tokens[i][2], ()), self.by_slot):
+        by_part = self.by_part if tokens[i][2] in self.part_first_words else ()
+        for p in itertools.chain(self.by_word.get(tokens[i][2], ()), by_part, self.by_slot):
             found = self._match(p.sequence, tokens, i)
+            if found and p.upper and text is not None:
+                surface = text[tokens[i][0]:tokens[i + found[0] - 1][1]]
+                if not surface.replace("/", "").replace(" ", "").isupper():
+                    continue
             if found and (best is None or found[0] > best.length):
                 best = LexiconMatch(found[0], p, found[1])
         return best
