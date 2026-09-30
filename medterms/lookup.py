@@ -1,6 +1,7 @@
 """Find codes for a term, and measure how well a list of lay terms reaches the expected codes."""
 
 import csv
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from medterms.normalize import normalize_term
 # reaches the ICD-9-CM codes NS claims use), and name-matched links from `medterms link`.
 MAPPING_RELATIONSHIPS = ("umls_cui_of", "may_be", "maps_to", "maps_to_approx", "mapped_from", "approx_mapped_from")
 # Confidence for links stored without one: code-to-code maps are less certain than a concept's own codes.
+# Manifestation codes ("... in diseases classified elsewhere") can't be a primary diagnosis: they count half.
+MANIFESTATION = re.compile(r"\bin (?:diseases|conditions) classified elsewhere\b", re.I)
 DEFAULT_CONFIDENCE = ("CASE WHEN r.relationship_id IN ('maps_to', 'mapped_from') THEN 0.8 "
                       "WHEN r.relationship_id IN ('maps_to_approx', 'approx_mapped_from') THEN 0.7 ELSE 1 END")
 
@@ -39,32 +42,91 @@ def find_terms(db: Database, term: str, limit: int = 20) -> list[Match]:
     return [Match(*row, 1.0) for row in rows]
 
 
-def find_codes(db: Database, term: str, vocabulary: str, limit: int = 20) -> list[Match]:
-    """Codes in `vocabulary` for a term, best first: exact term matches before prefix matches,
-    then by link confidence, then billable codes first."""
+_LEXICON = None
+
+
+def primary_sense(concept_name: str, term: str) -> bool:
+    """Whether the concept is named by this term (same words, any order, plurals folded)."""
+    from medterms.linker import word_key
+
+    key = word_key(term)
+    return key is not None and key == word_key(concept_name)
+
+
+def _default_lexicon():
+    global _LEXICON
+    if _LEXICON is None:
+        from medterms.lexicon import Lexicon
+        _LEXICON = Lexicon.load()
+    return _LEXICON
+
+
+def curated_codes(db: Database, term: str, vocabulary: str, lexicon=None) -> list[Match]:
+    """Codes from the curated lay lexicon when one of its phrases covers the whole term
+    ("tummy ache" -> abdominal pain, "broke my wrist" -> wrist fracture)."""
+    from medterms.annotate import Annotator
+    from medterms.lexicon import CODE_SPEC
+
+    lexicon = lexicon or _default_lexicon()
+    tokens = Annotator._tokens(term)
+    match = lexicon.match(tokens, 0) if tokens else None
+    if match is None or match.length != len(tokens):
+        return []
+    found: dict[str, Match] = {}
+    for target in match.targets():
+        if target == "-":
+            return []
+        for spec in (part.strip() for part in target.split("+")):
+            if CODE_SPEC.match(spec):
+                vocab, _, code = spec.partition(":")
+                if vocab.upper() != vocabulary:
+                    continue
+                rows = db.query("SELECT code, name, is_billable FROM concept WHERE vocabulary_id = ? AND code = ?",
+                                (vocabulary, code))
+                matches = [Match(vocabulary, c, n, term, "curated", b, 1.0) for c, n, b in rows]
+            else:
+                matches = [Match(m.vocabulary, m.code, m.name, term, "curated", m.billable, m.confidence)
+                           for m in find_codes(db, spec, vocabulary, limit=3, lexicon=False)]
+            for m in matches:
+                found.setdefault(m.code, m)
+    return list(found.values())
+
+
+def find_codes(db: Database, term: str, vocabulary: str, limit: int = 20, lexicon=None) -> list[Match]:
+    """Codes in `vocabulary` for a term, best first: codes from the curated lay lexicon when one
+    of its phrases covers the whole term (lexicon=False to skip it), then exact term matches
+    before prefix matches, then concepts named by the term before those listing it as a
+    synonym, then by link confidence (manifestation codes count half), then
+    billable codes, then "unspecified" codes first."""
+    curated = [] if lexicon is False else curated_codes(db, term, vocabulary, lexicon)
     norm = normalize_term(term)
     match = "(s.term_normalized = ? OR s.term_normalized LIKE ?)"
     hops = ", ".join("?" * len(MAPPING_RELATIONSHIPS))
     sql = (
         "SELECT t.vocabulary_id, t.code, t.name, s.term, s.term_type, t.is_billable, "
-        f"CASE WHEN s.term_normalized = ? THEN 0 ELSE 1 END, COALESCE(r.confidence, {DEFAULT_CONFIDENCE}) "
+        f"CASE WHEN s.term_normalized = ? THEN 0 ELSE 1 END, COALESCE(r.confidence, {DEFAULT_CONFIDENCE}), c.name "
         "FROM concept_synonym s JOIN concept c ON c.concept_id = s.concept_id "
         f"JOIN concept_relationship r ON r.concept_id_1 = c.concept_id AND r.relationship_id IN ({hops}) "
         "JOIN concept t ON t.concept_id = r.concept_id_2 AND t.vocabulary_id = ? "
         f"WHERE {match} "
         "UNION ALL "
         "SELECT c.vocabulary_id, c.code, c.name, s.term, s.term_type, c.is_billable, "
-        "CASE WHEN s.term_normalized = ? THEN 0 ELSE 1 END, 1 "
+        "CASE WHEN s.term_normalized = ? THEN 0 ELSE 1 END, 1, c.name "
         "FROM concept_synonym s JOIN concept c ON c.concept_id = s.concept_id AND c.vocabulary_id = ? "
         f"WHERE {match} LIMIT 5000"
     )
     params = [norm, *MAPPING_RELATIONSHIPS, vocabulary, norm, norm + " %", norm, vocabulary, norm, norm + " %"]
     best: dict[str, tuple[tuple, Match]] = {}
-    for vocab, code, name, matched, term_type, billable, exact, confidence in db.query(sql, params):
-        rank = (exact, -float(confidence), -billable)
+    for vocab, code, name, matched, term_type, billable, exact, confidence, source_name in db.query(sql, params):
+        confidence = float(confidence) * (0.5 if MANIFESTATION.search(name) else 1.0)
+        # a concept named by the term beats one that only lists it as a synonym
+        # ("hip fracture" names Hip Fractures; Fracture of pelvis merely lists it)
+        rank = (exact, not primary_sense(source_name, matched), -confidence, -billable,
+                "unspecified" not in name.lower())
         if code not in best or rank < best[code][0]:
-            best[code] = (rank, Match(vocab, code, name, matched, term_type, billable, float(confidence)))
-    return [m for _, m in sorted(best.values(), key=lambda b: (b[0], b[1].code))][:limit]
+            best[code] = (rank, Match(vocab, code, name, matched, term_type, billable, confidence))
+    ranked = [m for _, m in sorted(best.values(), key=lambda b: (b[0], b[1].code))]
+    return (curated + [m for m in ranked if m.code not in {c.code for c in curated}])[:limit]
 
 
 def evaluate(db: Database, path: Path, top: int = 3, verbose: bool = False) -> dict[str, float]:

@@ -1,0 +1,11 @@
+term,target,cues
+# Terms with more than one common meaning, and words that point to each sense when they appear
+# anywhere else in the same text. The sense with most cue words wins; with none, the annotator
+# falls back to a vote by ICD-10 chapter with the other mentions, then flags the mention
+# `ambiguous`. term: as matched (normalized, lower case). target: as in patterns.csv.
+ms,multiple sclerosis,numbness|numb|tingling|vision|optic|relapse|relapsing|lesion|lesions|mri|neurologist|neurology|walking|balance|weakness|fatigue|spasticity|interferon|ocrevus|tysabri|demyelinating
+ms,mitral stenosis,murmur|valve|mitral|echo|echocardiogram|cardiac|cardiology|cardiologist|afib|atrial fibrillation|rheumatic|heart|valvuloplasty
+pe,pulmonary embolism,clot|dvt|anticoagulation|anticoagulated|heparin|warfarin|apixaban|rivaroxaban|cta|ct angiogram|pleuritic|hypoxia|hypoxic|d dimer|saddle|tachycardic
+pe,physical examination,exam|examination|vitals|auscultation|palpation|inspection|unremarkable|findings|heent|abdomen soft
+shot,icd9cm:99.29,vaccine|vaccination|flu|tetanus|booster|immunization|immunized|nurse|needle|jab|b12|cortisone|steroid|arm|injection|pharmacy
+shot,gunshot wound,gun|gunshot|bullet|police|shooting|rifle|pistol|trauma|wound|bleeding

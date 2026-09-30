@@ -1,0 +1,31 @@
+kind,condition,icd10cm,icd9cm,note
+# Family / personal history codes for conditions whose history code can't be found by name
+# (a heart attack is under "ischemic heart disease", colon cancer under "digestive organs").
+# condition: an ICD-10-CM code prefix of the condition's own code. Checked before name matching;
+# the longest matching prefix wins. Check with `medterms annotate --check-lexicon`.
+family,I20,Z82.49,V17.3,ischemic heart disease
+family,I21,Z82.49,V17.3,heart attack
+family,I22,Z82.49,V17.3,
+family,I24,Z82.49,V17.3,
+family,I25,Z82.49,V17.3,
+family,I10,Z82.49,V17.49,hypertension
+family,I11,Z82.49,V17.49,
+family,I50,Z82.49,V17.49,heart failure
+family,C18,Z80.0,V16.0,colon cancer
+family,C19,Z80.0,V16.0,
+family,C20,Z80.0,V16.0,rectal cancer
+family,C25,Z80.0,V16.0,pancreatic cancer
+family,C16,Z80.0,V16.0,stomach cancer
+family,C34,Z80.1,V16.1,lung cancer
+family,E10,Z83.3,V18.0,diabetes
+family,E11,Z83.3,V18.0,
+family,E13,Z83.3,V18.0,
+family,N20,Z84.1,V18.69,kidney stones
+family,N18,Z84.1,V18.69,chronic kidney disease
+family,F32,Z81.8,V17.0,depression
+family,F33,Z81.8,V17.0,
+family,F41,Z81.8,V17.0,anxiety
+history,C18,Z85.038,V10.05,colon cancer
+history,C20,Z85.048,V10.06,rectal cancer
+history,C34,Z85.118,V10.11,lung cancer
+history,A15,Z86.11,V12.01,tuberculosis

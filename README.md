@@ -29,6 +29,9 @@ medterms --db sqlite:///terms.db load fees --payer NS_MSI ns_fees.csv
 medterms --db sqlite:///terms.db link
 medterms --db sqlite:///terms.db lookup "heart attack" --to ICD10CM
 medterms --db sqlite:///terms.db evaluate eval/lay_terms.csv
+
+# Find concepts in running text
+medterms --db sqlite:///terms.db annotate "Hx of MI. Now has chest pain and is worried about another heart attack."
 ```
 
 Load ICD-10-CM and ICD-9-CM before UMLS: the UMLS loader links to existing ICD codes but never creates them.
@@ -50,12 +53,15 @@ iCloud skips, e.g. `uv venv .venv.nosync && ln -s .venv.nosync .venv`.
 | `medterms/loaders/icd9cm.py` | ICD-9-CM diagnoses and procedures, and the CMS GEMs in both directions |
 | `medterms/linker.py` | `medterms link`: approximate links from UMLS concepts to ICD-10-CM, ICD-9-CM and NS fee codes by name, and across the GEMs |
 | `medterms/lookup.py` | Term lookup ranked by link confidence, and `medterms evaluate` |
+| `medterms/annotate.py` | `medterms annotate`: find clinical concepts in running text (transcripts, dictation) and link them to codes |
+| `medterms/lexicon.py`, `medterms/lexicon_data/` | Curated lay lexicon: everyday phrases, body-part patterns and clinical abbreviations (`patterns.csv`, `body_parts.csv`), sense cues for ambiguous terms (`senses.csv`), and family / personal history codes (`context_codes.csv`) |
+| `eval/annotate_sentences.csv` | 30 transcript-style sentences with the mentions each should yield and words that must not be tagged |
 | `eval/lay_terms.csv` | 61 everyday conditions with expected ICD-10-CM / ICD-9-CM code prefixes, and 15 procedures that should reach an NS fee code |
 | `medterms/loaders/fees.py` | Payer fee schedules, unit values and payer code lists from a normalized CSV |
 | `medterms/extract/` | PDF fee schedule and code list extractor, driven by a per-payer profile; writes the normalized CSV plus a report of lines it couldn't place |
 | `medterms/extract/bulletins.py` | Physician's Bulletin extractor: fee announcements as a dated change log (new, updated, terminated) |
 | `medterms/profiles/` | Extractor profiles: `ns_msi_fees`, `ns_msi_modifiers`, `ns_msi_explanatory`, `ns_msi_bulletins` |
-| `medterms/cli.py` | `medterms init / load / extract / link / lookup / evaluate` |
+| `medterms/cli.py` | `medterms init / load / extract / link / lookup / annotate / evaluate` |
 | `schema/example_seed.sql`, `schema/example_lookup.sql` | Hand-written rows showing how lay terms map to ranked ICD-10-CM candidates (load into an empty database only, because they use fixed ids) |
 | `tests/` | pytest suite, run against sample files written in each source's format; set `MEDTERMS_TEST_PG=postgresql://.../postgres` to run it on PostgreSQL too |
 
@@ -94,18 +100,136 @@ and the Level 0 subset has no ICD-10-CM atoms, so only ~5% of lay concepts reach
 | broader | all but one of the concept's words, leaving a disease name (infective cystitis → Cystitis) | ≤ 0.55 |
 | gem | an ICD-9-CM link carried to ICD-10-CM through the GEMs, or the reverse | × 0.7–0.8 |
 
-Diagnosis concepts link only to diagnosis codes and procedure concepts only to procedure codes.
+The 2018 GEMs only cover billable ICD-10-CM codes that existed in 2018, so `link` first derives the
+missing ICD-10-CM ↔ ICD-9-CM mappings from the ICD-10-CM hierarchy (source `GEM_DERIVED`): a category
+takes the ICD-9-CM codes its billable descendants map to when at least 20% agree, counting initial
+encounters only and open fractures at half weight (S72.00 "fracture of neck of femur" → 820.8), and a
+code added after 2018 borrows from its "unspecified" sibling (F32.A "Depression, unspecified" → 311 /
+296.20 via F32.9). `lookup` follows these too.
 
-`medterms evaluate eval/lay_terms.csv` on the Level 0 subset, after linking:
+When a term names one concept and is only a listed synonym of another, the named concept ranks first
+("hip fracture" is the name of Hip Fractures; Fracture of pelvis merely lists it).
+
+Diagnosis concepts link only to diagnosis codes and procedure concepts only to procedure codes. Every
+link, UMLS's own included, is halved when the code's title adds context the concept doesn't have
+("Complications …, hypertension" or "Postprocedural hypertension" for Hypertensive disease) or is a
+manifestation code ICD doesn't allow as a primary diagnosis ("… in diseases classified elsewhere").
+
+`medterms evaluate eval/lay_terms.csv` on the Level 0 subset, after linking (a development set too):
 
 | Target | Reached a code | Expected code in top 3 |
 |---|---|---|
-| ICD-10-CM | 59 / 61 (97%) | 57 / 61 (93%) |
-| ICD-9-CM (NS claim diagnoses) | 58 / 61 (95%) | 55 / 61 (90%) |
-| NS fee codes (procedures) | 9 / 15 (60%) | |
+| ICD-10-CM | 61 / 61 | 61 / 61 |
+| ICD-9-CM (NS claim diagnoses) | 61 / 61 | 61 / 61 |
+| NS fee codes (procedures) | 15 / 15 | 15 / 15 |
 
-The misses are mostly lay terms the vocabularies don't have ("broken arm", "morning sickness", "tubes tied",
-"cataract surgery"). Those need curated lay mappings, not more matching.
+Linking alone reached 93% / 90% / 60%; the rest comes from the curated lexicon ("tummy ache", "ear
+infection", "broken arm", "morning sickness", "tubes tied", "stitches"). "Hip fracture" and
+"depression" reach ICD-9-CM through derived mappings (below).
+
+### Annotating text
+
+```python
+from medterms.db import Database
+from medterms.annotate import Annotator
+
+annotator = Annotator(Database("sqlite:///terms.db"))   # loads ~470k terms once: a few seconds, ~250 MB
+for m in annotator.annotate("hx of MI, now c/o chest pain and she's always thirsty"):
+    print(m.start, m.end, m.text, m.best.name, m.best.key, m.best.codes["ICD10CM"][0].code)
+# 6 8 MI Myocardial Infarction umls:C0027051 I21.9
+# 18 28 chest pain Chest Pain umls:C0008031 R07.9
+# 39 53 always thirsty Polydipsia umls:C0085602 R63.1
+```
+
+The annotator scans for the longest run of words (up to 10) that matches a known term, using the
+same normalization as the database. Matches never cross punctuation. When the text doesn't match as
+written it also tries a plural last word ("heart attacks"), number words ("type two diabetes") and
+dropped articles ("blood in the stool"); terms are also indexed without their bracketed parts.
+
+Before the dictionary it tries the **curated lay lexicon**, which covers how people actually talk
+and wins over a dictionary match of the same length:
+
+| Said | Tagged as |
+|---|---|
+| can't put weight on it | Difficulty walking (R26.2 / 719.7) |
+| broke his left wrist, cracked a rib | Fracture of carpal bone (S62.10 / 814.00), Rib fractures (S22.3 / 807.00) |
+| my knee hurts, pain in her lower back, tummy aches | Knee pain, Low back pain, Abdominal pain |
+| sprained her ankle, ankle is swollen | Sprain of ankle, Effusion of ankle |
+| quit smoking / smokes a pack a day / doesn't smoke | Z87.891 + V15.82 / Z72.0 + 305.1 / Z72.0 negated |
+| can't sleep, not eating, peeing a lot, sugars all over the place | Insomnia, Loss of appetite, Polyuria, Hyperglycemia |
+| ear infection, stomach ache, morning sickness | Otitis media, Abdominal pain, Vomiting of pregnancy |
+| stitches, tubes tied, wart removal, gallbladder out | with NS fee codes 98.22D, 78.39A, 98.12W; cholecystectomy |
+
+The lexicon is two CSV files in `medterms/lexicon_data/`: `patterns.csv` (phrases with alternatives,
+optional words and `<part>` / `<det>` / `<obj>` slots, each mapped to terms or codes) and
+`body_parts.csv` (lay words for body parts, e.g. tummy → abdomen, with their usual pain terms). A
+target is an ordinary term the dictionary resolves ("fracture of {part}"), a code (`icd10cm:Z87.891`),
+codes combined with `+`, or `-` to suppress junk (CHV's "put weight" → Failure to gain weight). When
+several targets resolve, the one reaching the most code sets wins. Add lines to grow it, and run
+`medterms annotate --check-lexicon` to see which targets resolve in your database (for body-part
+patterns, which parts they work for). `medterms lookup` uses the same lexicon when a phrase covers
+the whole term. The lexicon is our own content and is committed; nothing in it depends on a UMLS release.
+
+It skips:
+- concepts that aren't conditions, symptoms, procedures or findings ("patient", "daughter")
+- common conversational words that happen to be UMLS strings ("said", "but")
+- side synonyms of words that mainly name something non-clinical: UMLS lists "blood" as a synonym of leukemia
+- mentions that reach no code, unless they are a condition, a symptom, or have a clinical word in their name ("Mastectomy", "Chemotherapy")
+- abbreviations not written in capitals ("MI" yes, "me" no)
+
+"X and Y" splits into two mentions when both halves are terms.
+
+Each mention also gets context, ConText-style (NegEx extended), from cue words in the same clause:
+
+| Field | Values | Cues, for example |
+|---|---|---|
+| `assertion` | `negated` / `hypothetical` / `uncertain` | "no", "denies X, Y, or Z", "was ruled out" / "call if", "risk of" / "possible", "rule out", "suspected" |
+| `experiencer` | `family` | "mom", "dad", "grandma", "family history of", "runs in the family" (not son / daughter / baby: in a pediatric visit the parent is describing the patient) |
+| `temporality` | `history` | "history of", "hx", "s/p", "prior", "years ago", "as a child", "in 2019" |
+
+A cue reaches to the end of its clause (up to 12 words; lists like "denies X, Y, or Z" included); a
+contrast or a new subject ends it ("possible kidney infection, **she** has flank pain").
+
+For a relative's or a past condition the codes change, because they are different codes:
+
+| Said | Codes |
+|---|---|
+| her mom had a stroke | Z82.3 / V17.1 family history of stroke |
+| dad had colon cancer and a heart attack | Z80.0 / V16.0, Z82.49 / V17.3 |
+| history of breast cancer | Z85.3 / V10.3 personal history of malignant neoplasm of breast |
+| hx of MI in 2019 | I25.2 / 412 old myocardial infarction |
+| had a stroke two years ago | Z86.73 / V12.54 |
+| history of hypertension | I10 / 401.9 unchanged: there's no personal history code, the condition is still there |
+
+The history code comes from `lexicon_data/context_codes.csv` (curated, for conditions filed under a
+broader heading: a heart attack under "ischemic heart disease") or else by name ("Family history of …",
+"Personal history of …", "Old …"). A relative's condition with no specific code gets the generic
+family history code (Z84.89 / V19.8). The condition's own codes stay in `mention.condition_codes`.
+Negated, hypothetical and uncertain mentions keep their codes and are only flagged: whether to bill a
+"rule out" diagnosis is the caller's decision.
+
+**Ambiguous words and abbreviations.** Clinical abbreviations in the lexicon match only in capitals and
+take their usual sense in clinical speech (CP → chest pain, SOB, HTN, DM / T2DM, CAD, CHF, OSA, PNA,
+LBP, "high BP" → hypertension, "knee OA", "wrist fx"). Everyday wording settles most of "shot" ("got a
+shot in her arm" → injection, "was shot" → gunshot wound). When a mention's top candidates still mean
+different things, `lexicon_data/senses.csv` lists cue words for each sense, looked for anywhere else in
+the text: "MS" with "numbness", "vision" → multiple sclerosis, with "murmur", "echo" → mitral stenosis;
+"PE" with "heparin" → pulmonary embolism, with "vitals", "unremarkable" → physical examination. Without
+cue words, the candidate whose ICD-10 chapter the other mentions share wins; otherwise the mention is
+flagged `ambiguous` with its best guess first, and `annotate(ambiguous="drop")` leaves such mentions out.
+The sense chosen and why is in `mention.cues`.
+
+After loading (2–5 s, ~250 MB), a 5,000-word transcript takes about 0.1–0.2 s.
+
+Candidates carry a canonical `key` ("umls:C0027051", "icd10cm:I21.9"), and with `pip install -e ".[brain]"`
+a `node_id`: the first 16 bytes of `blake3(key)`, the same content addressing Brain uses for graph nodes.
+
+`medterms annotate --evaluate eval/annotate_sentences.csv` (67 sentences) finds all 109 expected mentions
+with the right context (negated, family, history, uncertain, hypothetical) and sense, and tags none of
+42 forbidden phrases. That is a development set: the rules and
+lexicon were written while looking at it, so it shows the current state, not accuracy on unseen text.
+Known gaps: ambiguity with no cue words or chapter overlap (flagged, not resolved), lower-case
+abbreviations ("cp and sob" is left alone), and any everyday wording the lexicon doesn't cover yet.
 
 ### How a lay term reaches a code (example from the test data)
 

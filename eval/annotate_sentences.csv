@@ -1,0 +1,69 @@
+text,expect,forbid
+# expect: "phrase=CODE|CODE; ..." (ICD-10-CM, ICD-9-CM or NS fee code prefixes; * = any concept). Context in brackets must match exactly: "phrase[family]", "phrase[history,uncertain]"; "-phrase" = negated. forbid: "word; ..." must not be tagged.
+"I've had this cough for about two weeks and now I'm running a fever",cough=R05|786.2; fever=R50|780.6,weeks
+"She said her chest pain started after dinner and went down her left arm",chest pain=R07|786.5,said; dinner; left
+"Past history of MI and high blood pressure, on metformin for type 2 diabetes",MI[history]=I25.2|412; high blood pressure[history]=I10|401; type 2 diabetes[history]=E11|250,
+"He's been having headaches every morning and some blurry vision",headaches=R51|G44|784.0; blurry vision=H53|368,morning
+"My back has been killing me since I lifted the couch",back has been killing me=M54|724.5,couch; since
+"The baby has had diarrhea and vomiting since yesterday",diarrhea=R19.7|787.91|K59.1|A09|009; vomiting=R11|787.0,yesterday
+"Mom has asthma and she uses her puffer twice a day",asthma[family]=Z82.5|V17.5,day
+"I get heartburn after I eat spicy food",heartburn=R12|787.1,food
+"He broke his wrist playing hockey",broke his wrist=S62|S52|814|813,hockey
+"We did an appendectomy last spring",appendectomy=59|47,spring
+"She's due for a colonoscopy",colonoscopy=01.22|45.23,
+"Patient reports shortness of breath on exertion and swelling in both ankles",shortness of breath=R06|786.0; swelling=R60|782.3|M25.47|719.0,reports
+"Any dizziness or fainting spells?",dizziness=R42|780.4; fainting=R55|780.2,
+"He's feeling really down lately and not sleeping well",,really; well; lately
+"She had a C-section with her second child",C-section=86.1|74|O82,second; child
+"Kidney stones run in the family",kidney stones[family]=Z84.1|V18.69,
+"I think I have pink eye, my eye is all crusty",pink eye=H10|372,think
+"Sore throat and swollen glands for three days",sore throat=J02|462|R07.0; swollen glands=R59|785.6,days
+"He had a stroke two years ago and has some weakness on the right side",stroke[history]=Z86.73|V12.54; weakness=R53|M62.81|780.79|728.87,right
+"She has a UTI, burning when she pees",UTI=N39.0|599.0,
+"Hx of COPD, quit smoking in 2010",COPD[history]=J44|496|493; quit smoking[history]=Z87.891|V15.82,
+"The rash on her arm looks like eczema",rash=R21|782.1; eczema=L30|L20|692|691,looks
+"Knee replacement scheduled for March",knee replacement=93.41|93.47|81.54,march
+"Stomach ache and bloating after meals",stomach ache=R10|789.0; bloating=R14|787.3,meals
+"No known allergies, no history of cancer",-allergies=*; -cancer=*,
+"Well, I was wondering if I could get my prescription refilled",,well; wondering
+"She's been anxious and having panic attacks",anxious=F41|300.0|R45; panic attacks=F41.0|300.01,
+"The baby has an ear infection again",ear infection=H66|H65|382|381,again
+"I need a tetanus shot, I stepped on a nail",tetanus shot=*,need
+"Her sugars have been all over the place and she's always thirsty",sugars have been all over the place=R73|790.2; thirsty=R63.1|783.5,
+"52 year old male presents with acute onset substernal chest pressure radiating to the jaw, diaphoretic, nauseated.",chest pressure=R07|786.5; nauseated=R11|787.0,male; presents
+"History of hypertension, hyperlipidemia, type two diabetes on insulin, and a prior CABG in 2018.",hypertension[history]=I10|401; hyperlipidemia[history]=E78|272; type two diabetes[history]=E11|250; CABG[history]=36.1|48.1,prior
+"She's had a runny nose and a stuffy head for a week, some ear pain, no fever.",runny nose=*; ear pain=H92|388.7; -fever=R50|780.6,week
+"He fell off a ladder and his ankle is swollen, can't put weight on it.",swollen=*; can't put weight on it=R26|719.7|781.2,ladder
+"Patient denies shortness of breath, palpitations, or syncope.",-shortness of breath=R06|786.0; -palpitations=R00.2|785.1; -syncope=R55|780.2,
+"Complains of low back pain radiating down the left leg, numbness in the foot.",low back pain=M54.5|724.2,leg
+"Possible kidney infection, she has flank pain and burning urination.",kidney infection[uncertain]=N10|N12|N15|N39|590; flank pain=R10|789.0,possible
+"Blood in the stool for two days and some abdominal cramping.",blood in the stool=K92.1|R19.5|578.1|792.1; abdominal cramping=R10|789.0,days
+"History of breast cancer, had a mastectomy and chemo.",breast cancer[history]=Z85.3|V10.3; mastectomy[history]=*; chemo[history]=Z92.21|V87.41,
+"No fever but a bad cough.",-fever=*; cough=R05|786.2,bad
+"My knee hurts when I walk up the stairs.",knee hurts=M25.56|719.46,stairs; walk
+"She has pain in her lower back and her tummy aches.",pain in her lower back=M54.5|724.2; tummy aches=R10|789.0,
+"He smokes a pack a day but she doesn't smoke.",smokes a pack a day=Z72.0|305.1; -smoke=Z72.0|305.1,
+"She sprained her ankle and twisted her knee.",sprained her ankle=S93.4|845.0; twisted her knee=S83|844,
+"I think I cracked a rib.",cracked a rib=S22.3|807.0,think
+"I had my gallbladder out and cataract surgery last year.",gallbladder out=51.2|63.12; cataract surgery=13|27.7,year
+"He's not eating and can't sleep.",not eating=R63.0|783.0; can't sleep=G47.0|780.52|F51.0,
+"Her sugars have been all over the place and she's peeing a lot.",sugars have been all over the place=R73|790.2; peeing a lot=R35|788.4,
+"She's pregnant with bad morning sickness.",morning sickness=O21|643,
+"My throat is sore and my ears hurt.",throat is sore=J02|462|R07.0; ears hurt=H92|388.7,
+"Her mom had a stroke and she has asthma.",stroke[family]=Z82.3|V17.1; asthma=J45|493,
+"Dad had colon cancer and a heart attack at 50.",colon cancer[family]=Z80.0|V16.0; heart attack[family]=Z82.4|V17.3,
+"Family history of diabetes.","diabetes[family,history]=Z83.3|V18.0",
+"Rule out pneumonia.",pneumonia[uncertain]=J18|486,
+"Call if you get a fever.",fever[hypothetical]=*,
+"Hx of MI in 2019.",MI[history]=I25.2|412,
+"No family history of cancer.",-cancer=*,
+"She got a shot in her arm.",shot=99.29,
+"He was shot in the leg.",shot=W34|E922,leg
+"The patient has MS with numbness and blurry vision.",MS=G35|340; numbness=R20|782.0,
+"Known MS, loud murmur on exam, echo ordered.",MS=I05|394,
+"Concern for PE, started on heparin.",PE[uncertain]=I26|415,
+"PE unremarkable, vitals stable.",PE=89.7,
+"He has CP and SOB, hx of HTN and DM.","CP=R07|786.5; SOB=R06|786.0; HTN[history]=I10|401; DM[history]=E11|250",
+"Left knee OA.",knee OA=M17|715,
+"Wrist fx after a fall.",wrist fx=S62|814; fall=*,
+"She has a cold and a cough.",cold=J00|460; cough=R05|786.2,

@@ -1,0 +1,100 @@
+pattern,targets,note,case
+# Curated lay phrases and patterns, checked before the dictionary; a pattern wins over a
+# dictionary match of the same length. See medterms/lexicon.py for the syntax.
+#
+# pattern: words; [a|b|c] alternatives (each may be several words; no nesting); ? after a word or group makes
+#   it optional; <part> a body part (body_parts.csv), <det> up to three of my/his/her/the/left/...,
+#   <obj> me/him/her/them. Write patterns without leading <det> so "my" isn't part of the mention.
+# targets: all are tried; the one reaching the most code sets (ICD-10-CM, ICD-9-CM, NS) wins, earlier first on ties. A term (looked up in the dictionary, with
+#   {part} {adj} {pain} filled in from the body part), or a code "vocab:code". Add codes to the
+#   same candidate with "+": "icd10cm:Z87.891+icd9cm:V15.82". "-" suppresses the phrase.
+# case: "upper" to match only when written in capitals (abbreviations: "CP" yes, "cp" no).
+#
+# --- limb function
+[cant|cannot|can not|couldnt|could not|unable to|not able to] [put|bear] [any|much]? weight [on it|on <det> <part>|on]?,difficulty walking,"unable to bear weight, usually a leg or foot injury: R26.2 / 719.7"
+[cant|cannot|can not|couldnt|could not|unable to|not able to] walk [on it|on <det> <part>]?,difficulty walking,
+put weight,-,"CHV lists 'put weight' as Failure to gain weight"
+# --- everyday wording for symptoms
+[cant|cannot|can not|couldnt|could not|unable to|not able to|trouble|difficulty|hard time|problems] [sleep|sleeping|get to sleep|getting to sleep|fall asleep|falling asleep|stay asleep|staying asleep],insomnia,
+[cant|cannot|can not|couldnt|could not|unable to|trouble|difficulty|hard time] [breathe|breathing|catch <det> breath|get <det> breath|catching <det> breath],shortness of breath,
+[not|isnt|hasnt been|havent been|wasnt|hasnt|havent] [eating|hungry],loss of appetite,
+no appetite,loss of appetite,
+[throwing up|threw up|throw up|puking|puked|vomited],vomiting,
+[sick to <det> stomach|queasy|feeling sick|feel sick|feels sick],nausea,
+[peeing|urinating|going to the bathroom|going to the washroom|going pee] [a lot|all the time|constantly|more often],polyuria,
+blood in <det> [pee|urine],hematuria,
+[peeing blood|pee blood],hematuria,
+[blood sugar|blood sugars|sugar|sugars] [is|are|was|were|has been|have been|been]? [high|up|too high|through the roof|all over the place|out of control],hyperglycemia,
+[stomach bug|stomach flu|tummy bug],gastroenteritis,
+ear infection,otitis media,"UMLS's 'Infection of ear' links to no code"
+[ear infections],otitis media,
+[stomach ache|stomachache|tummy ache|tummyache|belly ache|bellyache],abdominal pain,"CHV files 'stomach ache' under Upset stomach (dyspepsia)"
+# --- tobacco
+[quit smoking|stopped smoking|used to smoke|ex smoker|former smoker|gave up smoking|quit cigarettes|quit the cigarettes],icd10cm:Z87.891+icd9cm:V15.82,personal history of tobacco use
+[smoker|smoke|smokes|smoking|smokes cigarettes|smoke cigarettes|pack a day|packs a day],icd10cm:Z72.0+icd9cm:305.1,current tobacco use ("doesn't smoke" comes out negated)
+[smoker|smoke|smokes|smoked|smoking] [about|around]? [a|one|two|three|half a|a half]? [pack|packs] [a|per] day,icd10cm:Z72.0+icd9cm:305.1,current tobacco use
+# --- pregnancy
+morning sickness,icd10cm:O21.9+icd9cm:643.90,vomiting of pregnancy
+# --- visits and preventive care
+[annual|yearly] [physical|checkup|check up|exam],icd10cm:Z00.00+icd9cm:V70.0,routine adult examination
+flu shot,icd10cm:Z23+icd9cm:V04.81,influenza vaccination
+[tetanus shot|tetanus booster],icd10cm:Z23+icd9cm:V03.7,tetanus vaccination
+# --- procedures in lay words
+[stitches|stitched up|sutures],icd9cm:86.59+ns_msi:98.22D+ns_msi:98.22,closure of skin: NS 98.22D suture of minor laceration
+tubes tied,icd9cm:66.39+ns_msi:78.39A,tubal ligation: NS 78.39A interruption of fallopian tubes for sterilization
+[cataract surgery|cataract removal|cataracts removed|cataract removed|cataracts out],cataract extraction+ns_msi:27.72,
+[gallbladder removal|gallbladder removed|gallbladder out|gallbladder taken out],cholecystectomy,
+[wart removal|warts removed|wart removed|remove <det> wart|removed <det> wart|remove <det> warts|removed <det> warts],icd9cm:86.3+ns_msi:98.12W,NS 98.12W simple excision of warts
+[wart frozen off|warts frozen off|freeze <det> wart|froze <det> wart|freeze <det> warts|froze <det> warts],icd9cm:86.3+ns_msi:98.12U,NS 98.12U cryotherapy of warts
+[mole removal|mole removed|moles removed|remove <det> mole|removed <det> mole|mole taken off],excision of lesion of skin+ns_msi:98.12W,NS 98.12W simple excision of moles
+# --- body part patterns
+[broke|broken|fractured|cracked|busted|snapped] <det> <part>,fracture of {part}|{part} fracture|fracture {part},
+<part> [is|was|got|has been]? [broken|fractured|cracked],fracture of {part}|{part} fracture|fracture {part},
+[sprained|twisted|rolled|turned] <det> <part>,sprain of {part}|{part} sprain|sprain {part},
+<part> [is|was|got]? sprained,sprain of {part}|{part} sprain|sprain {part},
+[hurt|injured|banged|bumped|jammed|smashed|whacked|banged up] <det> <part>,injury {part}|injury of {part}|{part} injury,
+<part> [hurts|hurt|aches|ached|is aching|has been aching|is sore|was sore|has been sore|is painful|is killing <obj>|has been killing <obj>|kills <obj>|ache|pain|pains|cramps],{pain}|{adj} pain|{part} pain|pain in {part}|pain {part},
+[pain|pains|ache|aches|soreness|discomfort] in <det> <part>,{pain}|{adj} pain|{part} pain|pain in {part}|pain {part},
+sore <part>,{pain}|{adj} pain|{part} pain|pain in {part}|pain {part},
+<part> [is|was|got|has been]? [swollen|puffy|puffed up|swelled up|swelling],swelling {part}|swelling of {part}|effusion joint {part}|{part} swelling,
+[swollen|puffy] <part>,swelling {part}|swelling of {part}|effusion joint {part}|{part} swelling,
+swelling in <det> <part>,swelling {part}|swelling of {part}|effusion joint {part}|{part} swelling,
+# --- "shot": the noun after a/the/her is an injection; the verb is a gunshot
+[got|get|getting|had|have|has|need|needs|needed|give|gave|given|giving|due for|want|wants|receive|received] [a|the|her|his|my|your|their|another|this|that|one] shot,icd9cm:99.29,injection,
+[got|get|getting|had|have|has|need|needs|needed|give|gave|given|giving|due for|want|wants|receive|received] [a|the|her|his|my|your|their|another|this|that|one] shot in <det> <part>,icd9cm:99.29,injection,
+[b12|cortisone|steroid|allergy|pain] shot,icd9cm:99.29,injection,
+[was|been|got|get|getting|being] shot,gunshot wound,,
+[gunshot|gun shot] [wound]?,gunshot wound,,
+# --- common cold
+[have|has|had|got|caught|getting|catching|fighting] [a|the|this] cold,common cold,,
+# --- clinical abbreviations, in capitals only, with their usual sense in clinical speech
+CP,chest pain,"not cerebral palsy, the dictionary's first sense",upper
+SOB,shortness of breath,,upper
+[SOBOE|DOE],dyspnea on exertion,,upper
+HA,headache,,upper
+N V,nausea and vomiting,written N/V,upper
+HTN,hypertension,,upper
+[DM|DM2|T2DM|DMII|NIDDM],type 2 diabetes,,upper
+[T1DM|DM1|IDDM],type 1 diabetes,,upper
+CAD,coronary artery disease,,upper
+CHF,congestive heart failure,,upper
+[AF|AFIB],atrial fibrillation,,upper
+afib,atrial fibrillation,,
+URI,upper respiratory infection,,upper
+GERD,gastroesophageal reflux disease,,upper
+OA,osteoarthritis,,upper
+RA,rheumatoid arthritis,"not right atrium",upper
+LBP,low back pain,,upper
+[MVA|MVC],motor vehicle accident,,upper
+SI,suicidal ideation,,upper
+OSA,obstructive sleep apnea,,upper
+PNA,pneumonia,,upper
+LOC,loss of consciousness,,upper
+BPH,benign prostatic hyperplasia,,upper
+[high|elevated|raised] [BP|blood pressure],hypertension,,
+low [BP|blood pressure],hypotension,,
+<part> fx,fracture of {part}|{part} fracture|fracture {part},"fx = fracture",
+# --- abbreviations with more than one sense: every sense is a target; senses.csv picks by context
+MS,multiple sclerosis|mitral stenosis,see senses.csv,upper
+PE,pulmonary embolism|physical examination,see senses.csv,upper
+<part> OA,osteoarthritis of {part}|{part} osteoarthritis|osteoarthritis {part},,

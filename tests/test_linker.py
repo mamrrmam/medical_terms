@@ -105,3 +105,49 @@ def test_word_key():
     assert linker.word_key("Haemorrhage of intervertebral disks") == {"hemorrhage", "intervertebral", "disc"}
     assert linker.word_key("Other myocardial infarction type") == {"other", "myocardial", "infarction", "type"}
     assert linker.word_key("NOS") is None
+
+
+def test_derived_gems(db):
+    """ICD-10 codes the 2018 GEMs don't cover get ICD-9 mappings from the hierarchy."""
+    db.init_schema()
+    db.executemany("INSERT INTO vocabulary (vocabulary_id, name) VALUES (?, ?) ON CONFLICT (vocabulary_id) DO NOTHING",
+                   [("UMLS", "UMLS"), ("ICD10CM", "ICD-10-CM"), ("ICD9CM", "ICD-9-CM")])
+    c = {code: add(db, "ICD10CM", code, name, billable=billable) for code, name, billable in [
+        ("S72.00", "Fracture of unspecified part of neck of femur", 0),
+        ("S72.009A", "Fracture of neck of femur, initial encounter for closed fracture", 1),
+        ("S72.009B", "Fracture of neck of femur, initial encounter for open fracture", 1),
+        ("S72.009D", "Fracture of neck of femur, subsequent encounter for closed fracture", 1),
+        ("S72.009S", "Fracture of neck of femur, sequela", 1),
+        ("F32", "Depressive episode", 0),
+        ("F32.9", "Major depressive disorder, single episode, unspecified", 1),
+        ("F32.A", "Depression, unspecified", 1)]}
+    n = {code: add(db, "ICD9CM", code, name) for code, name in [
+        ("820.8", "Closed fracture of neck of femur"), ("820.9", "Open fracture of neck of femur"),
+        ("V54.13", "Aftercare for healing traumatic fracture of hip"), ("905.3", "Late effect of fracture of neck of femur"),
+        ("311", "Depressive disorder, not elsewhere classified")]}
+    for child, parent in [("S72.009A", "S72.00"), ("S72.009B", "S72.00"), ("S72.009D", "S72.00"), ("S72.009S", "S72.00"),
+                          ("F32.9", "F32"), ("F32.A", "F32")]:
+        db.execute("INSERT INTO concept_relationship (concept_id_1, concept_id_2, relationship_id, source) "
+                   "VALUES (?, ?, 'is_a', 'ICD10CM')", (c[child], c[parent]))
+    for icd10, icd9 in [("S72.009A", "820.8"), ("S72.009B", "820.9"), ("S72.009D", "V54.13"), ("S72.009S", "905.3"),
+                        ("F32.9", "311")]:
+        db.execute("INSERT INTO concept_relationship (concept_id_1, concept_id_2, relationship_id, source) "
+                   "VALUES (?, ?, 'approx_mapped_from', 'CMS_GEM')", (c[icd10], n[icd9]))
+    db.commit()
+
+    assert linker.derive_gems(db) == {"derived_gem": 4, "derived_gem_codes": 3}
+    rows = db.query(
+        "SELECT a.code, b.code, r.confidence FROM concept_relationship r JOIN concept a ON a.concept_id = r.concept_id_1 "
+        "JOIN concept b ON b.concept_id = r.concept_id_2 WHERE r.source = 'GEM_DERIVED' "
+        "AND r.relationship_id = 'approx_mapped_from' ORDER BY a.code, r.confidence DESC")
+    # the category pools its initial-encounter codes (open fractures count half; aftercare and
+    # sequela codes don't count), and the post-2018 code borrows from its unspecified sibling
+    assert [(a, b, float(conf)) for a, b, conf in rows] == [
+        ("F32", "311", 0.7), ("F32.A", "311", 0.6), ("S72.00", "820.8", 0.583), ("S72.00", "820.9", 0.467)]
+
+
+def test_primary_sense():
+    from medterms.lookup import primary_sense
+    assert primary_sense("Hip Fractures", "hip fracture")
+    assert not primary_sense("Fracture of pelvis", "hip fracture")
+    assert not primary_sense("Myocardial Infarction", "heart attack")
