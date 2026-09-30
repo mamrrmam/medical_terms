@@ -1,0 +1,63 @@
+word,part,adjective,pain
+# word as people say it -> part used in target terms ("fracture of {part}"), optional adjective
+# ("{adj} pain"), and the usual term for pain there when it isn't "{part} pain"
+head,head,,headache
+stomach,abdomen,abdominal,abdominal pain
+tummy,abdomen,abdominal,abdominal pain
+belly,abdomen,abdominal,abdominal pain
+abdomen,abdomen,abdominal,abdominal pain
+gut,abdomen,abdominal,abdominal pain
+chest,chest,,chest pain
+back,back,,back pain
+lower back,lower back,,low back pain
+low back,lower back,,low back pain
+upper back,upper back,,back pain
+neck,neck,,neck pain
+shoulder,shoulder,,shoulder pain
+shoulders,shoulder,,shoulder pain
+arm,arm,,arm pain
+arms,arm,,arm pain
+upper arm,upper arm,,arm pain
+elbow,elbow,,elbow pain
+elbows,elbow,,elbow pain
+forearm,forearm,,arm pain
+wrist,wrist,,wrist pain
+wrists,wrist,,wrist pain
+hand,hand,,hand pain
+hands,hand,,hand pain
+finger,finger,,finger pain
+fingers,finger,,finger pain
+thumb,thumb,,thumb pain
+hip,hip,,hip pain
+hips,hip,,hip pain
+leg,leg,,leg pain
+legs,leg,,leg pain
+thigh,thigh,,thigh pain
+knee,knee,,knee pain
+knees,knee,,knee pain
+shin,lower leg,,leg pain
+calf,calf,,calf pain
+ankle,ankle,,ankle pain
+ankles,ankle,,ankle pain
+foot,foot,,foot pain
+feet,foot,,foot pain
+heel,heel,,heel pain
+toe,toe,,toe pain
+toes,toe,,toe pain
+big toe,great toe,,toe pain
+rib,rib,,
+ribs,rib,,
+collarbone,clavicle,,
+collar bone,clavicle,,
+nose,nose,,
+jaw,jaw,,jaw pain
+tooth,tooth,,toothache
+teeth,tooth,,toothache
+ear,ear,,earache
+ears,ear,,earache
+eye,eye,,eye pain
+eyes,eye,,eye pain
+throat,throat,,sore throat
+skull,skull,,
+pelvis,pelvis,,pelvic pain
+side,flank,,flank pain

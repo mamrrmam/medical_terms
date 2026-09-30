@@ -4,7 +4,7 @@ text,expect,forbid
 "She said her chest pain started after dinner and went down her left arm",chest pain=R07|786.5,said; dinner; left
 "Past history of MI and high blood pressure, on metformin for type 2 diabetes",MI=I21|410; high blood pressure=I10|401; type 2 diabetes=E11|250,
 "He's been having headaches every morning and some blurry vision",headaches=R51|G44|784.0; blurry vision=H53|368,morning
-"My back has been killing me since I lifted the couch",,me; couch; since
+"My back has been killing me since I lifted the couch",back has been killing me=M54|724.5,couch; since
 "The baby has had diarrhea and vomiting since yesterday",diarrhea=R19.7|787.91|K59.1|A09|009; vomiting=R11|787.0,yesterday
 "Mom has asthma and she uses her puffer twice a day",asthma=J45|493,day
 "I get heartburn after I eat spicy food",heartburn=R12|787.1,food
@@ -20,7 +20,7 @@ text,expect,forbid
 "Sore throat and swollen glands for three days",sore throat=J02|462|R07.0; swollen glands=R59|785.6,days
 "He had a stroke two years ago and has some weakness on the right side",stroke=I63|I64|434|436; weakness=R53|M62.81|780.79|728.87,right
 "She has a UTI, burning when she pees",UTI=N39.0|599.0,
-"Hx of COPD, quit smoking in 2010",COPD=J44|496; smoking=*,
+"Hx of COPD, quit smoking in 2010",COPD=J44|496; quit smoking=Z87.891|V15.82,
 "The rash on her arm looks like eczema",rash=R21|782.1; eczema=L30|L20|692|691,looks
 "Knee replacement scheduled for March",knee replacement=93.41|93.47|81.54,march
 "Stomach ache and bloating after meals",stomach ache=R10|789.0; bloating=R14|787.3,meals
@@ -29,14 +29,24 @@ text,expect,forbid
 "She's been anxious and having panic attacks",anxious=F41|300.0|R45; panic attacks=F41.0|300.01,
 "The baby has an ear infection again",ear infection=H66|H65|382|381,again
 "I need a tetanus shot, I stepped on a nail",tetanus shot=*,need
-"Her sugars have been all over the place and she's always thirsty",thirsty=R63.1|783.5,place
+"Her sugars have been all over the place and she's always thirsty",sugars have been all over the place=R73|790.2; thirsty=R63.1|783.5,
 "52 year old male presents with acute onset substernal chest pressure radiating to the jaw, diaphoretic, nauseated.",chest pressure=R07|786.5; nauseated=R11|787.0,male; presents
 "History of hypertension, hyperlipidemia, type two diabetes on insulin, and a prior CABG in 2018.",hypertension=I10|401; hyperlipidemia=E78|272; type two diabetes=E11|250; CABG=36.1|48.1,prior
 "She's had a runny nose and a stuffy head for a week, some ear pain, no fever.",runny nose=*; ear pain=H92|388.7; -fever=R50|780.6,week
-"He fell off a ladder and his ankle is swollen, can't put weight on it.",swollen=*,put weight; ladder
+"He fell off a ladder and his ankle is swollen, can't put weight on it.",swollen=*; can't put weight on it=R26|719.7|781.2,ladder
 "Patient denies shortness of breath, palpitations, or syncope.",-shortness of breath=R06|786.0; -palpitations=R00.2|785.1; -syncope=R55|780.2,
 "Complains of low back pain radiating down the left leg, numbness in the foot.",low back pain=M54.5|724.2,leg
 "Possible kidney infection, she has flank pain and burning urination.",kidney infection=N10|N12|N15|N39|590; flank pain=R10|789.0,possible
 "Blood in the stool for two days and some abdominal cramping.",blood in the stool=K92.1|R19.5|578.1|792.1; abdominal cramping=R10|789.0,days
 "History of breast cancer, had a mastectomy and chemo.",breast cancer=C50|174|Z85.3|V10.3; mastectomy=*; chemo=*,
 "No fever but a bad cough.",-fever=*; cough=R05|786.2,bad
+"My knee hurts when I walk up the stairs.",knee hurts=M25.56|719.46,stairs; walk
+"She has pain in her lower back and her tummy aches.",pain in her lower back=M54.5|724.2; tummy aches=R10|789.0,
+"He smokes a pack a day but she doesn't smoke.",smokes a pack a day=Z72.0|305.1; -smoke=Z72.0|305.1,
+"She sprained her ankle and twisted her knee.",sprained her ankle=S93.4|845.0; twisted her knee=S83|844,
+"I think I cracked a rib.",cracked a rib=S22.3|807.0,think
+"I had my gallbladder out and cataract surgery last year.",gallbladder out=51.2|63.12; cataract surgery=13|27.7,year
+"He's not eating and can't sleep.",not eating=R63.0|783.0; can't sleep=G47.0|780.52|F51.0,
+"Her sugars have been all over the place and she's peeing a lot.",sugars have been all over the place=R73|790.2; peeing a lot=R35|788.4,
+"She's pregnant with bad morning sickness.",morning sickness=O21|643,
+"My throat is sore and my ears hurt.",throat is sore=J02|462|R07.0; ears hurt=H92|388.7,

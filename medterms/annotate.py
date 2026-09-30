@@ -9,6 +9,11 @@ Matching is by dictionary: the text is split into words, normalized the same way
 synonym in the database, and scanned left to right for the longest run of words that is a
 known term (up to `max_words`). Nothing is guessed from context yet.
 
+Before the dictionary, the curated lay lexicon (medterms/lexicon.py) is tried at each position:
+everyday wording and body-part patterns such as "can't put weight on it", "broke his wrist" and
+"my knee hurts", mapped to terms or codes. A lexicon match wins over a dictionary match of the
+same length; its best candidate has term_type "curated".
+
 Each mention keeps several candidate concepts, best first, because the same words can name
 different things ("cold": common cold or feeling cold). A candidate is scored by how its
 term was recorded (clinical and preferred names over lay terms, index entries and
@@ -57,6 +62,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from medterms.db import Database
+from medterms.lexicon import CODE_SPEC, Lexicon, LexiconMatch
 from medterms.lookup import DEFAULT_CONFIDENCE, MANIFESTATION, MAPPING_RELATIONSHIPS
 from medterms.normalize import normalize_term
 
@@ -68,6 +74,7 @@ TERM_WEIGHT = {"preferred": 1.0, "clinical": 1.0, "lay": 0.9, "index": 0.8, "abb
 DOMAIN_WEIGHT = {"condition": 1.0, "symptom": 1.0, "procedure": 0.95, "observation": 0.85,
                  "drug": 0.8, "measurement": 0.8, "device": 0.7, "anatomy": 0.6, "other": 0.5}
 UNLINKED = 0.8   # a concept that reaches no code is still worth showing, but after those that do
+SUPPRESS = "suppress"
 KEEP_UNLINKED = {"condition", "symptom"}   # other kinds of concept must reach a code to count ...
 # ... unless their name has a clinical word in it ("Mastectomy", "Chemotherapy"), which "Reporting",
 # "Placement - action" and "Protocol Treatment Arm" don't
@@ -85,7 +92,8 @@ NUMBER_WORDS = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", 
 ARTICLES = {"the", "a", "an"}
 BRACKETED = re.compile(r"\([^)]*\)|\[[^]]*\]")
 
-NEGATION_BEFORE = {"no", "not", "denies", "denied", "deny", "denying", "without", "negative for", "free of",
+NEGATION_BEFORE = {"no", "not", "dont", "doesnt", "didnt", "isnt", "wasnt", "arent", "werent", "hasnt", "havent",
+                   "hadnt", "denies", "denied", "deny", "denying", "without", "negative for", "free of",
                    "never had", "no history of", "no evidence of", "no sign of", "no signs of", "absence of",
                    "rules out", "ruled out", "rule out", "no complaints of", "nor", "never"}
 NEGATION_AFTER = {"ruled out", "was ruled out", "is ruled out", "negative", "was negative", "is negative",
@@ -176,8 +184,11 @@ class Annotator:
     """Loads the term dictionary once (a few seconds, a few hundred MB), then annotates quickly."""
 
     def __init__(self, db: Database, vocabularies=VOCABULARIES, domains=DOMAINS, max_words: int = 10,
-                 max_candidates: int = 5):
+                 max_candidates: int = 5, lexicon: Lexicon | None | bool = True):
+        """lexicon: True for the bundled one, a Lexicon, or None/False for none."""
         self.db = db
+        self.lexicon = Lexicon.load() if lexicon is True else (lexicon or None)
+        self._resolved: dict[str, tuple | None] = {}
         self.domains = set(domains)
         self.max_words = max_words
         self.max_candidates = max_candidates
@@ -232,6 +243,7 @@ class Annotator:
             f"WHERE r.relationship_id IN ({hops}) AND t.vocabulary_id IN ({code_marks})",
             [*MAPPING_RELATIONSHIPS, *CODE_VOCABULARIES])}
         self.linked |= {cid for cid, (vocab, *_rest) in self.concepts.items() if vocab in CODE_VOCABULARIES}
+        self.code_index = {(vocab, code): cid for cid, (vocab, code, *_rest) in self.concepts.items()}
 
     @staticmethod
     def _usable(norm: str) -> bool:
@@ -249,6 +261,7 @@ class Annotator:
         mentions: list[tuple[int, int, Mention]] = []   # (first token, last token, mention)
         i = 0
         while i < len(tokens):
+            lex = self.lexicon.match(tokens, i) if self.lexicon else None
             found = None
             for n in range(min(self.max_words, len(tokens) - i), 0, -1):
                 if any(tokens[k][3] for k in range(i + 1, i + n)):
@@ -259,6 +272,20 @@ class Annotator:
                 if entries:
                     found = (n, entries)
                     break
+            if lex and (found is None or lex.length >= found[0]):
+                resolved = self._resolve_match(lex)
+                if resolved == SUPPRESS:
+                    i += lex.length
+                    continue
+                if resolved:
+                    candidates = self._choose(resolved, codes_per_vocabulary, min_confidence)
+                    if not with_codes:
+                        for cand in candidates:
+                            cand.codes = {}
+                    start, end = tokens[i][0], tokens[i + lex.length - 1][1]
+                    mentions.append((i, i + lex.length - 1, Mention(start, end, text[start:end], candidates)))
+                    i += lex.length
+                    continue
             if found is None:
                 i += 1
                 continue
@@ -312,6 +339,110 @@ class Annotator:
             return True
         return any(CLINICAL_WORD.search(w) and w not in NOT_CLINICAL
                    for w in normalize_term(f"{cand.name} {cand.matched_term}").split())
+
+    # -- lexicon ---------------------------------------------------------------------------
+
+    def _resolve_match(self, match: LexiconMatch):
+        """SUPPRESS, or [(candidates, extra code concept ids)] for every target that resolves, in order."""
+        options = []
+        for target in match.targets():
+            if target not in self._resolved:
+                self._resolved[target] = self._resolve(target)
+            result = self._resolved[target]
+            if result == SUPPRESS:
+                return SUPPRESS
+            if result is not None:
+                candidates, extras = result
+                copies = [Candidate(**{**c.__dict__, "codes": {}}) for c in candidates]
+                copies[0].matched_term = match.pattern.text
+                options.append((copies, extras))
+        return options
+
+    def _choose(self, options, per_vocabulary: int, min_confidence: float) -> list["Candidate"]:
+        """Put the option whose best candidate reaches the most code sets first; the other
+        options' best candidates follow as alternatives."""
+        scored = []
+        for index, (candidates, extras) in enumerate(options):
+            for cand in candidates:
+                cand.codes = self.codes(cand.concept_id, per_vocabulary, min_confidence)
+            candidates[0].codes = self._with_extra_codes(candidates[0].codes, extras)
+            reach = sum(1 for links in candidates[0].codes.values() if links)
+            scored.append((-reach, index, candidates))
+        scored.sort(key=lambda s: (s[0], s[1]))
+        chosen = list(scored[0][2])
+        for _, _, candidates in scored[1:]:
+            if all(c.concept_id != candidates[0].concept_id for c in chosen):
+                chosen.append(candidates[0])
+        return chosen[:self.max_candidates]
+
+    def _resolve(self, target: str):
+        if target == "-":
+            return SUPPRESS
+        primary, *extra_specs = [part.strip() for part in target.split("+")]
+        extras = [cid for spec in extra_specs if (cid := self._code_concept(spec)) is not None]
+        if CODE_SPEC.match(primary):
+            cid = self._code_concept(primary)
+            if cid is None:
+                return None
+            vocab, code, name, domain = self.concepts[cid]
+            candidates = [Candidate(cid, vocab, code, name, domain, primary, "curated", 1.0)]
+        else:
+            words = normalize_term(primary).split()
+            entries = self._lookup(words, primary.lower()) if words else None
+            if not entries:
+                return None
+            candidates = self._candidates(entries)
+            if not candidates:
+                return None
+        candidates[0].term_type, candidates[0].score = "curated", 1.0
+        return candidates, extras
+
+    def _code_concept(self, spec: str) -> int | None:
+        """Concept id for 'vocab:code', loading it even if outside `domains`."""
+        vocab, _, code = spec.partition(":")
+        key = (vocab.upper(), code)
+        if key not in self.code_index:
+            rows = self.db.query("SELECT concept_id, name, domain FROM concept WHERE vocabulary_id = ? AND code = ?", key)
+            if not rows:
+                return None
+            cid, name, domain = rows[0]
+            self.concepts[cid] = (key[0], code, name, domain)
+            self.code_index[key] = cid
+        return self.code_index[key]
+
+    def _with_extra_codes(self, codes: dict[str, list["CodeLink"]], extras: list[int]):
+        """Add the extra concepts' own codes to the front of their vocabularies."""
+        if not extras:
+            return codes
+        codes = {v: list(links) for v, links in codes.items()}
+        for cid in reversed(extras):
+            vocab, code, name, _ = self.concepts[cid]
+            billable = bool(self.db.query("SELECT is_billable FROM concept WHERE concept_id = ?", (cid,))[0][0])
+            links = [l for l in codes.get(vocab, []) if l.code != code]
+            codes[vocab] = [CodeLink(vocab, code, name, billable, 1.0), *links]
+        return codes
+
+    def check_lexicon(self) -> list[str]:
+        """Lexicon problems against this database: patterns whose targets never resolve, and for
+        body-part patterns, how many parts they work for. ("fracture of ear" not resolving is fine.)"""
+        report = []
+        if not self.lexicon:
+            return report
+        seen = set()
+        for p in self.lexicon.patterns:
+            if (p.text, p.targets) in seen:
+                continue
+            seen.add((p.text, p.targets))
+            if "{" not in p.targets:
+                if not self._resolve_match(LexiconMatch(1, p, None)):
+                    report.append(f"UNRESOLVED {p.text!r}: none of {p.targets!r} is a known term or code")
+                continue
+            words = sorted({part.part: word for word, part in self.lexicon.parts.items()}.items())
+            working = [part for part, word in words
+                       if self._resolve_match(LexiconMatch(1, p, self.lexicon.parts[word]))]
+            status = "UNRESOLVED" if not working else "ok"
+            report.append(f"{status} {p.text!r}: {len(working)}/{len(words)} parts ({', '.join(working)})")
+        return report
 
     def _conjunction_split(self, words: list[str]) -> int | None:
         """Word count of the left part when a match is 'X and/or Y' with X and Y both terms."""
@@ -403,8 +534,12 @@ def _mark_negation(tokens, mentions) -> None:
     if not mentions:
         return
     cues_before: list[int] = []   # token index where each cue's scope starts
+    inside = {k for first, last, _ in mentions for k in range(first, last + 1)}   # "not eating" is a mention
     i = 0
     while i < len(tokens):
+        if i in inside:
+            i += 1
+            continue
         if n := _phrase_at(tokens, i, PSEUDO_NEGATION):
             i += n
             continue

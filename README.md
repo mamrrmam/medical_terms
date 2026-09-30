@@ -54,6 +54,7 @@ iCloud skips, e.g. `uv venv .venv.nosync && ln -s .venv.nosync .venv`.
 | `medterms/linker.py` | `medterms link`: approximate links from UMLS concepts to ICD-10-CM, ICD-9-CM and NS fee codes by name, and across the GEMs |
 | `medterms/lookup.py` | Term lookup ranked by link confidence, and `medterms evaluate` |
 | `medterms/annotate.py` | `medterms annotate`: find clinical concepts in running text (transcripts, dictation) and link them to codes |
+| `medterms/lexicon.py`, `medterms/lexicon_data/` | Curated lay lexicon: everyday phrases and body-part patterns ("can't put weight on it", "broke his wrist", "my knee hurts") mapped to terms or codes |
 | `eval/annotate_sentences.csv` | 30 transcript-style sentences with the mentions each should yield and words that must not be tagged |
 | `eval/lay_terms.csv` | 61 everyday conditions with expected ICD-10-CM / ICD-9-CM code prefixes, and 15 procedures that should reach an NS fee code |
 | `medterms/loaders/fees.py` | Payer fee schedules, unit values and payer code lists from a normalized CSV |
@@ -104,16 +105,17 @@ link, UMLS's own included, is halved when the code's title adds context the conc
 ("Complications …, hypertension" or "Postprocedural hypertension" for Hypertensive disease) or is a
 manifestation code ICD doesn't allow as a primary diagnosis ("… in diseases classified elsewhere").
 
-`medterms evaluate eval/lay_terms.csv` on the Level 0 subset, after linking:
+`medterms evaluate eval/lay_terms.csv` on the Level 0 subset, after linking (a development set too):
 
 | Target | Reached a code | Expected code in top 3 |
 |---|---|---|
-| ICD-10-CM | 59 / 61 (97%) | 57 / 61 (93%) |
-| ICD-9-CM (NS claim diagnoses) | 58 / 61 (95%) | 55 / 61 (90%) |
-| NS fee codes (procedures) | 9 / 15 (60%) | |
+| ICD-10-CM | 61 / 61 | 61 / 61 |
+| ICD-9-CM (NS claim diagnoses) | 61 / 61 | 59 / 61 |
+| NS fee codes (procedures) | 15 / 15 | 15 / 15 |
 
-The misses are mostly lay terms the vocabularies don't have ("broken arm", "morning sickness", "tubes tied",
-"cataract surgery"). Those need curated lay mappings, not more matching.
+Linking alone reached 93% / 90% / 60%; the rest comes from the curated lexicon ("tummy ache", "ear
+infection", "broken arm", "morning sickness", "tubes tied", "stitches"). Still missed: "broken hip"
+and "depression" in ICD-9-CM, where UMLS's links are thin.
 
 ### Annotating text
 
@@ -134,10 +136,29 @@ same normalization as the database. Matches never cross punctuation. When the te
 written it also tries a plural last word ("heart attacks"), number words ("type two diabetes") and
 dropped articles ("blood in the stool"); terms are also indexed without their bracketed parts.
 
-Each mention keeps up to five candidate concepts, best first ("MI" is Myocardial Infarction before
-Motivational Interviewing), each with its best ICD-10-CM, ICD-9-CM and NS fee codes: links with
-confidence 0.4 or more, billable codes before categories, "unspecified" first among equals, and
-manifestation codes ("… in diseases classified elsewhere") at half weight.
+Before the dictionary it tries the **curated lay lexicon**, which covers how people actually talk
+and wins over a dictionary match of the same length:
+
+| Said | Tagged as |
+|---|---|
+| can't put weight on it | Difficulty walking (R26.2 / 719.7) |
+| broke his left wrist, cracked a rib | Fracture of carpal bone (S62.10 / 814.00), Rib fractures (S22.3 / 807.00) |
+| my knee hurts, pain in her lower back, tummy aches | Knee pain, Low back pain, Abdominal pain |
+| sprained her ankle, ankle is swollen | Sprain of ankle, Effusion of ankle |
+| quit smoking / smokes a pack a day / doesn't smoke | Z87.891 + V15.82 / Z72.0 + 305.1 / Z72.0 negated |
+| can't sleep, not eating, peeing a lot, sugars all over the place | Insomnia, Loss of appetite, Polyuria, Hyperglycemia |
+| ear infection, stomach ache, morning sickness | Otitis media, Abdominal pain, Vomiting of pregnancy |
+| stitches, tubes tied, wart removal, gallbladder out | with NS fee codes 98.22D, 78.39A, 98.12W; cholecystectomy |
+
+The lexicon is two CSV files in `medterms/lexicon_data/`: `patterns.csv` (phrases with alternatives,
+optional words and `<part>` / `<det>` / `<obj>` slots, each mapped to terms or codes) and
+`body_parts.csv` (lay words for body parts, e.g. tummy → abdomen, with their usual pain terms). A
+target is an ordinary term the dictionary resolves ("fracture of {part}"), a code (`icd10cm:Z87.891`),
+codes combined with `+`, or `-` to suppress junk (CHV's "put weight" → Failure to gain weight). When
+several targets resolve, the one reaching the most code sets wins. Add lines to grow it, and run
+`medterms annotate --check-lexicon` to see which targets resolve in your database (for body-part
+patterns, which parts they work for). `medterms lookup` uses the same lexicon when a phrase covers
+the whole term. The lexicon is our own content and is committed; nothing in it depends on a UMLS release.
 
 It skips:
 - concepts that aren't conditions, symptoms, procedures or findings ("patient", "daughter")
@@ -156,12 +177,11 @@ loading (2–5 s, ~250 MB), a 5,000-word transcript takes about 10 ms.
 Candidates carry a canonical `key` ("umls:C0027051", "icd10cm:I21.9"), and with `pip install -e ".[brain]"`
 a `node_id`: the first 16 bytes of `blake3(key)`, the same content addressing Brain uses for graph nodes.
 
-`medterms annotate --evaluate eval/annotate_sentences.csv` (40 sentences, a development set the rules
-were tuned on) finds 60 of 64 expected mentions (94%), with negation scored, and tags one of 40
-forbidden phrases. Known problems: CHV junk lay terms ("can't put weight on it" → Failure to gain
-weight); genuinely ambiguous single words ("shot": injection or gunshot, tied); and missing lay
-wording ("broke his wrist", "quit smoking", "ear infection" has no code link, "stomach ache" is filed
-under dyspepsia).
+`medterms annotate --evaluate eval/annotate_sentences.csv` (50 sentences) finds all 84 expected mentions,
+negation included, and tags none of 41 forbidden phrases. That is a development set: the rules and
+lexicon were written while looking at it, so it shows the current state, not accuracy on unseen text.
+Known gaps: genuinely ambiguous single words ("shot": injection or gunshot, tied), history and family
+context, and any everyday wording the lexicon doesn't cover yet.
 
 ### How a lay term reaches a code (example from the test data)
 

@@ -42,10 +42,54 @@ def find_terms(db: Database, term: str, limit: int = 20) -> list[Match]:
     return [Match(*row, 1.0) for row in rows]
 
 
-def find_codes(db: Database, term: str, vocabulary: str, limit: int = 20) -> list[Match]:
-    """Codes in `vocabulary` for a term, best first: exact term matches before prefix matches,
-    then by link confidence (manifestation codes count half), then billable codes, then
-    "unspecified" codes first."""
+_LEXICON = None
+
+
+def _default_lexicon():
+    global _LEXICON
+    if _LEXICON is None:
+        from medterms.lexicon import Lexicon
+        _LEXICON = Lexicon.load()
+    return _LEXICON
+
+
+def curated_codes(db: Database, term: str, vocabulary: str, lexicon=None) -> list[Match]:
+    """Codes from the curated lay lexicon when one of its phrases covers the whole term
+    ("tummy ache" -> abdominal pain, "broke my wrist" -> wrist fracture)."""
+    from medterms.annotate import Annotator
+    from medterms.lexicon import CODE_SPEC
+
+    lexicon = lexicon or _default_lexicon()
+    tokens = Annotator._tokens(term)
+    match = lexicon.match(tokens, 0) if tokens else None
+    if match is None or match.length != len(tokens):
+        return []
+    found: dict[str, Match] = {}
+    for target in match.targets():
+        if target == "-":
+            return []
+        for spec in (part.strip() for part in target.split("+")):
+            if CODE_SPEC.match(spec):
+                vocab, _, code = spec.partition(":")
+                if vocab.upper() != vocabulary:
+                    continue
+                rows = db.query("SELECT code, name, is_billable FROM concept WHERE vocabulary_id = ? AND code = ?",
+                                (vocabulary, code))
+                matches = [Match(vocabulary, c, n, term, "curated", b, 1.0) for c, n, b in rows]
+            else:
+                matches = [Match(m.vocabulary, m.code, m.name, term, "curated", m.billable, m.confidence)
+                           for m in find_codes(db, spec, vocabulary, limit=3, lexicon=False)]
+            for m in matches:
+                found.setdefault(m.code, m)
+    return list(found.values())
+
+
+def find_codes(db: Database, term: str, vocabulary: str, limit: int = 20, lexicon=None) -> list[Match]:
+    """Codes in `vocabulary` for a term, best first: codes from the curated lay lexicon when one
+    of its phrases covers the whole term (lexicon=False to skip it), then exact term matches
+    before prefix matches, then by link confidence (manifestation codes count half), then
+    billable codes, then "unspecified" codes first."""
+    curated = [] if lexicon is False else curated_codes(db, term, vocabulary, lexicon)
     norm = normalize_term(term)
     match = "(s.term_normalized = ? OR s.term_normalized LIKE ?)"
     hops = ", ".join("?" * len(MAPPING_RELATIONSHIPS))
@@ -69,7 +113,8 @@ def find_codes(db: Database, term: str, vocabulary: str, limit: int = 20) -> lis
         rank = (exact, -confidence, -billable, "unspecified" not in name.lower())
         if code not in best or rank < best[code][0]:
             best[code] = (rank, Match(vocab, code, name, matched, term_type, billable, confidence))
-    return [m for _, m in sorted(best.values(), key=lambda b: (b[0], b[1].code))][:limit]
+    ranked = [m for _, m in sorted(best.values(), key=lambda b: (b[0], b[1].code))]
+    return (curated + [m for m in ranked if m.code not in {c.code for c in curated}])[:limit]
 
 
 def evaluate(db: Database, path: Path, top: int = 3, verbose: bool = False) -> dict[str, float]:

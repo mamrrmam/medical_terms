@@ -87,6 +87,12 @@ def cmd_annotate(args):
     from medterms.annotate import Annotator, evaluate
 
     annotator = Annotator(Database(args.db))
+    if args.check_lexicon:
+        report = annotator.check_lexicon()
+        print("\n".join(report))
+        if any(line.startswith("UNRESOLVED") for line in report):
+            sys.exit(1)
+        return
     if args.evaluate:
         evaluate(annotator, Path(args.evaluate), verbose=args.verbose)
         return
@@ -172,6 +178,8 @@ def main(argv=None):
     p.add_argument("--json", action="store_true", help="print mentions as JSON")
     p.add_argument("--evaluate", metavar="CSV", help="score against a sentence set (text,expect,forbid)")
     p.add_argument("-v", "--verbose", action="store_true", help="with --evaluate: print every mention")
+    p.add_argument("--check-lexicon", action="store_true",
+                   help="check the curated lexicon's targets resolve in this database")
     p.set_defaults(func=cmd_annotate)
 
     p = sub.add_parser("evaluate", help="measure how well lay terms reach expected codes (CSV: term,icd10,icd9,ns)")

@@ -148,3 +148,97 @@ def test_to_dict_and_evaluate(annotator, tmp_path, capsys):
     result = evaluate(annotator, sentences)
     assert result == {"recall": 0.75, "forbidden": 0, "extras": 0}
     assert "missed: stroke" in capsys.readouterr().out
+
+
+# --- curated lexicon -----------------------------------------------------------------------
+
+from medterms.lexicon import Lexicon, expand  # noqa: E402
+
+LEXICON_PATTERNS = """pattern,targets,note
+# comment line
+[cant|unable to] [put|bear] weight [on it|on <det> <part>]?,difficulty walking,
+put weight,-,junk
+[broke|fractured] <det> <part>,fracture of {part}|{part} fracture,
+<part> [hurts|is killing <obj>],{pain}|{part} pain,
+[quit smoking|used to smoke],icd10cm:Z87.891+icd9cm:V15.82,
+[not|isnt] eating,loss of appetite,
+nonsense phrase,no such term,
+"""
+LEXICON_PARTS = """word,part,adjective,pain
+wrist,wrist,,
+knee,knee,,knee pain
+tummy,abdomen,abdominal,abdominal pain
+"""
+
+
+@pytest.fixture
+def with_lexicon(annotator, tmp_path):
+    db = annotator.db
+    walk = add(db, "UMLS", "C0311394", "Difficulty walking", domain="symptom")
+    wrist_a = add(db, "UMLS", "C5551302", "Fracture of wrist")
+    wrist_b = add(db, "UMLS", "C0016644", "Fracture of carpal bone", synonyms=[("wrist fracture", "clinical")])
+    knee = add(db, "UMLS", "C0231749", "Knee pain", domain="symptom")
+    appetite = add(db, "UMLS", "C0232462", "Loss of appetite", domain="symptom")
+    add(db, "UMLS", "C0231246", "Failure to gain weight", domain="observation", synonyms=[("put weight", "lay")])
+    codes = {name: add(db, vocab, code, name, domain="observation" if code.startswith(("Z", "V")) else "condition")
+             for vocab, code, name in [("ICD10CM", "R26.2", "Difficulty in walking"), ("ICD9CM", "719.7", "Difficulty in walking "),
+                                       ("ICD10CM", "S62.10", "Fracture of carpal bone"), ("ICD9CM", "814.00", "Fracture of carpal bone "),
+                                       ("ICD10CM", "M25.569", "Pain in unspecified knee"), ("ICD10CM", "R63.0", "Anorexia"),
+                                       ("ICD10CM", "Z87.891", "Personal history of nicotine dependence"),
+                                       ("ICD9CM", "V15.82", "Personal history of tobacco use")]}
+    link(db, walk, codes["Difficulty in walking"], 1.0)
+    link(db, walk, codes["Difficulty in walking "], 1.0)
+    link(db, wrist_a, codes["Fracture of carpal bone"], 1.0)                 # ICD-10 only
+    link(db, wrist_b, codes["Fracture of carpal bone"], 1.0)                 # ICD-10 and ICD-9
+    link(db, wrist_b, codes["Fracture of carpal bone "], 1.0)
+    link(db, knee, codes["Pain in unspecified knee"], 1.0)
+    link(db, appetite, codes["Anorexia"], 1.0)
+    db.commit()
+    (tmp_path / "patterns.csv").write_text(LEXICON_PATTERNS)
+    (tmp_path / "parts.csv").write_text(LEXICON_PARTS)
+    return Annotator(db, lexicon=Lexicon.load(tmp_path / "patterns.csv", tmp_path / "parts.csv"))
+
+
+def test_expand_patterns():
+    assert expand("[cant|unable to] walk?") == [
+        (("w", "cant"), ("w", "walk")), (("w", "cant"),), (("w", "unable"), ("w", "to"), ("w", "walk")),
+        (("w", "unable"), ("w", "to"))]
+    assert expand("<part> [hurts|is killing <obj>]") == [
+        (("slot", "part"), ("w", "hurts")), (("slot", "part"), ("w", "is"), ("w", "killing"), ("slot", "obj"))]
+
+
+def test_lexicon_patterns(with_lexicon):
+    got = [(m.text, m.best.name, m.best.term_type, {v: [l.code for l in ls] for v, ls in m.best.codes.items()})
+           for m in with_lexicon.annotate(
+               "He can't put weight on it and broke his left wrist. My knee is killing me. Quit smoking in 2010.")]
+    assert got == [
+        ("can't put weight on it", "Difficulty walking", "curated", {"ICD10CM": ["R26.2"], "ICD9CM": ["719.7"]}),
+        # both targets resolve; the one reaching ICD-10 and ICD-9 comes first
+        ("broke his left wrist", "Fracture of carpal bone", "curated", {"ICD10CM": ["S62.10"], "ICD9CM": ["814.00"]}),
+        ("knee is killing me", "Knee pain", "curated", {"ICD10CM": ["M25.569"]}),
+        # a code target with extra codes from another vocabulary on the same candidate
+        ("Quit smoking", "Personal history of nicotine dependence", "curated",
+         {"ICD10CM": ["Z87.891"], "ICD9CM": ["V15.82"]}),
+    ]
+    alternatives = with_lexicon.annotate("broke his wrist")[0].candidates
+    assert [c.name for c in alternatives] == ["Fracture of carpal bone", "Fracture of wrist"]
+
+
+def test_lexicon_suppression_and_negation(with_lexicon):
+    # "put weight" alone is suppressed, not tagged as Failure to gain weight
+    assert with_lexicon.annotate("try to put weight on the other foot") == []
+    # "not" inside the curated "not eating" doesn't negate the mention after it
+    got = [(m.text, m.assertion) for m in with_lexicon.annotate("He's not eating and has a headache. No headache.")]
+    assert got == [("not eating", None), ("headache", None), ("headache", "negated")]
+
+
+def test_check_lexicon(with_lexicon):
+    report = with_lexicon.check_lexicon()
+    assert "UNRESOLVED 'nonsense phrase': none of 'no such term' is a known term or code" in report
+    assert "ok '[broke|fractured] <det> <part>': 1/3 parts (wrist)" in report
+    assert not any("put weight" in line and "UNRESOLVED" in line for line in report)
+
+
+def test_without_lexicon(annotator):
+    plain = Annotator(annotator.db, lexicon=False)
+    assert plain.lexicon is None and plain.annotate("broke his wrist") == []
