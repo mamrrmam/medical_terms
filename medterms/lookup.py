@@ -1,6 +1,7 @@
 """Find codes for a term, and measure how well a list of lay terms reaches the expected codes."""
 
 import csv
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from medterms.normalize import normalize_term
 # reaches the ICD-9-CM codes NS claims use), and name-matched links from `medterms link`.
 MAPPING_RELATIONSHIPS = ("umls_cui_of", "may_be", "maps_to", "maps_to_approx", "mapped_from", "approx_mapped_from")
 # Confidence for links stored without one: code-to-code maps are less certain than a concept's own codes.
+# Manifestation codes ("... in diseases classified elsewhere") can't be a primary diagnosis: they count half.
+MANIFESTATION = re.compile(r"\bin (?:diseases|conditions) classified elsewhere\b", re.I)
 DEFAULT_CONFIDENCE = ("CASE WHEN r.relationship_id IN ('maps_to', 'mapped_from') THEN 0.8 "
                       "WHEN r.relationship_id IN ('maps_to_approx', 'approx_mapped_from') THEN 0.7 ELSE 1 END")
 
@@ -41,7 +44,8 @@ def find_terms(db: Database, term: str, limit: int = 20) -> list[Match]:
 
 def find_codes(db: Database, term: str, vocabulary: str, limit: int = 20) -> list[Match]:
     """Codes in `vocabulary` for a term, best first: exact term matches before prefix matches,
-    then by link confidence, then billable codes first."""
+    then by link confidence (manifestation codes count half), then billable codes, then
+    "unspecified" codes first."""
     norm = normalize_term(term)
     match = "(s.term_normalized = ? OR s.term_normalized LIKE ?)"
     hops = ", ".join("?" * len(MAPPING_RELATIONSHIPS))
@@ -61,9 +65,10 @@ def find_codes(db: Database, term: str, vocabulary: str, limit: int = 20) -> lis
     params = [norm, *MAPPING_RELATIONSHIPS, vocabulary, norm, norm + " %", norm, vocabulary, norm, norm + " %"]
     best: dict[str, tuple[tuple, Match]] = {}
     for vocab, code, name, matched, term_type, billable, exact, confidence in db.query(sql, params):
-        rank = (exact, -float(confidence), -billable)
+        confidence = float(confidence) * (0.5 if MANIFESTATION.search(name) else 1.0)
+        rank = (exact, -confidence, -billable, "unspecified" not in name.lower())
         if code not in best or rank < best[code][0]:
-            best[code] = (rank, Match(vocab, code, name, matched, term_type, billable, float(confidence)))
+            best[code] = (rank, Match(vocab, code, name, matched, term_type, billable, confidence))
     return [m for _, m in sorted(best.values(), key=lambda b: (b[0], b[1].code))][:limit]
 
 

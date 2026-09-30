@@ -21,6 +21,11 @@ lay concepts never reach a code through UMLS alone. This step adds approximate l
                   mappings, and a concept linked to ICD-10-CM reaches the ICD-9-CM codes that
                   map to it (so a lay term reaches the ICD-9 code NS claims need).
 
+Every link, including UMLS's own concept -> code links, is scored down when the code's title
+adds context the concept doesn't have ("Complications ..., hypertension" and "Postprocedural
+hypertension" for Hypertensive disease: x0.5), or when the code is a manifestation code that
+ICD doesn't allow as a primary diagnosis ("... in diseases classified elsewhere": x0.5).
+
 Links are written as 'maps_to_approx' (concept -> code) and 'approx_mapped_from'
 (code -> concept) with a confidence between 0 and 1 and source 'MATCH/<how>', so
 `medterms lookup --to` follows them and a rerun replaces them.
@@ -30,6 +35,7 @@ import re
 from collections import defaultdict
 
 from medterms.db import Database
+from medterms.lookup import MANIFESTATION
 from medterms.normalize import normalize_term
 
 SOURCE_PREFIX = "MATCH/"
@@ -61,6 +67,8 @@ UNSPECIFIED_WORDS = {"nos", "unspecified", "unspec"}
 FILLER = UNSPECIFIED_WORDS | {"nec", "site", "of", "the", "a", "an", "and", "or", "in", "to", "by", "for", "on",
                               "disorder", "finding", "condition", "specified"}
 MAX_EXTRA_WORDS = 2
+CONTEXT_PENALTY, MANIFESTATION_PENALTY = 0.5, 0.5
+
 # A broader match that leaves a single word must leave a disease name ("infective cystitis" ->
 # "cystitis"), not a generic word ("cerebrovascular accident" -> "accident").
 DISEASE_WORD = re.compile(r"(itis|osis|emia|oma|pathy|algia|plegia|trophy|ectasia|iasis|ism|rrhea|rrhage|cele)$"
@@ -156,9 +164,35 @@ def link(db: Database, targets: list[str] | None = None) -> dict[str, int]:
         "SELECT concept_id, domain FROM concept WHERE vocabulary_id IN (%s)" % ",".join("?" * len(TARGETS)),
         list(TARGETS)))
 
+    # words each concept is ever called, and each target code's title, for the context penalty
+    # (not counting ICD's own titles that UMLS attaches to the concept, or every code would
+    # look like it fits: UMLS puts "Complications ..., hypertension" on Hypertensive disease)
+    concept_words: dict[int, set[str]] = defaultdict(set)
+    for cui, norm in db.query(
+            "SELECT s.concept_id, s.term_normalized FROM concept_synonym s JOIN concept c ON c.concept_id = s.concept_id "
+            "WHERE c.vocabulary_id = 'UMLS' AND s.source NOT IN ('UMLS/ICD9CM', 'UMLS/ICD10CM')"):
+        concept_words[cui].update(_token(w) for w in norm.split())
+    code_title = dict(db.query(
+        "SELECT concept_id, name FROM concept WHERE vocabulary_id IN (%s)" % ",".join("?" * len(TARGETS)),
+        list(TARGETS)))
+    penalties: dict[tuple[int, int], float] = {}
+
+    def penalty(cui: int, code: int) -> float:
+        if (cui, code) not in penalties:
+            title = code_title.get(code, "")
+            # "Zoster without complications" adds no complication
+            kept = re.sub(r"\b(without|except|excluding|other than)\b[^,;]*", " ", title, flags=re.I)
+            words = {_token(w) for w in normalize_term(kept).split()}
+            p = CONTEXT_PENALTY if (words & CONTEXT_WORDS) - concept_words.get(cui, set()) else 1.0
+            if MANIFESTATION.search(title):
+                p *= MANIFESTATION_PENALTY
+            penalties[(cui, code)] = p
+        return penalties[(cui, code)]
+
     def offer(cui: int, code: int, score: float, how: str):
         if not compatible(concept_domain.get(cui, "other"), code_domain.get(code, "condition")):
             return
+        score *= penalty(cui, code)
         if score > best.get((cui, code), (0, ""))[0]:
             best[(cui, code)] = (round(score, 3), how)
 
@@ -203,7 +237,7 @@ def link(db: Database, targets: list[str] | None = None) -> dict[str, int]:
         "SELECT r.concept_id_1, r.concept_id_2 FROM concept_relationship r "
         "JOIN concept c ON c.concept_id = r.concept_id_1 AND c.vocabulary_id = 'UMLS' "
         "WHERE r.relationship_id = 'umls_cui_of'")
-    certain = {pair: 1.0 for pair in direct}
+    certain = {(cui, code): penalty(cui, code) for cui, code in direct}
 
     # 2. across the GEMs, in both directions
     vocab_of = dict(db.query("SELECT concept_id, vocabulary_id FROM concept WHERE vocabulary_id IN ('ICD9CM', 'ICD10CM')"))
@@ -238,6 +272,12 @@ def link(db: Database, targets: list[str] | None = None) -> dict[str, int]:
         "confidence = excluded.confidence, source = excluded.source",
         rows,
     )
+    # UMLS's own links keep their rows; they only get a confidence when penalised
+    db.executemany(
+        "UPDATE concept_relationship SET confidence = ? WHERE concept_id_1 = ? AND concept_id_2 = ? "
+        "AND relationship_id = 'umls_cui_of'",
+        [(score if score < 1 else None, cui, code) for (cui, code), score in certain.items()])
+    stats["umls_links_penalised"] = sum(1 for score in certain.values() if score < 1)
     db.commit()
     stats["links"] = len(rows) // 2
     stats["concepts_linked"] = len({cui for cui, _ in best})

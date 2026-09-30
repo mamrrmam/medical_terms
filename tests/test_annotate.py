@@ -29,7 +29,16 @@ def annotator(db):
         synonyms=[("arm", "clinical")])
     add(db, "UMLS", "C9999001", "But (abbreviation)", synonyms=[("but", "clinical")])  # a stopword
     add(db, "UMLS", "C0018681", "Headache", domain="symptom")
-    i21 = add(db, "ICD10CM", "I21.9", "Acute myocardial infarction, unspecified")
+    i21 = add(db, "ICD10CM", "I21.9", "Acute myocardial infarction, unspecified",
+              synonyms=[("Myocardial infarction (acute) NOS", "clinical")])
+    t2 = add(db, "UMLS", "C0011860", "Diabetes Mellitus, Non-Insulin-Dependent", synonyms=[("type 2 diabetes", "lay")])
+    bis = add(db, "UMLS", "C1321898", "Blood in stool", domain="symptom")
+    add(db, "UMLS", "C0024881", "Mastectomy", domain="procedure")                   # no code, but clinical
+    pye = add(db, "UMLS", "C0034186", "Pyelonephritis")
+    n16 = add(db, "ICD10CM", "N16", "Renal tubulo-interstitial disorders in diseases classified elsewhere",
+              synonyms=[("Pyelonephritis", "clinical")])
+    n12 = add(db, "ICD10CM", "N12", "Tubulo-interstitial nephritis, not specified as acute or chronic")
+    e11 = add(db, "ICD10CM", "E11.9", "Type 2 diabetes mellitus without complications")
     block = add(db, "ICD10CM", "I20-I25", "Ischemic heart diseases (I20-I25)", billable=0)
     db.execute("UPDATE concept SET concept_class = 'block' WHERE concept_id = ?", (block,))
     r07 = add(db, "ICD10CM", "R07.9", "Chest pain, unspecified")
@@ -44,6 +53,10 @@ def annotator(db):
     link(db, dia, r19, 1.0)
     link(db, vom, r11, 1.0)
     link(db, combo, r19, 0.9)
+    link(db, t2, e11, 0.95)
+    link(db, bis, r19, 0.3)       # too weak to show
+    link(db, pye, n16, 0.45)      # penalised manifestation link
+    link(db, pye, n12, 0.855)
     db.commit()
     return Annotator(db)
 
@@ -79,9 +92,42 @@ def test_conjunction_split(annotator):
 
 
 def test_code_concepts_match_by_their_own_names(annotator):
-    mention = annotator.annotate("chest pain, unspecified")[0]
-    assert mention.text == "chest pain, unspecified"
-    assert mention.best.vocabulary == "ICD10CM" and mention.best.codes["ICD10CM"][0].code == "R07.9"
+    mention = annotator.annotate("myocardial infarction NOS")[0]
+    assert mention.text == "myocardial infarction NOS"
+    assert mention.best.vocabulary == "ICD10CM" and mention.best.codes["ICD10CM"][0].code == "I21.9"
+
+
+def test_matches_stop_at_punctuation(annotator):
+    # "chest pain, unspecified" is chest pain plus a word; a comma never sits inside a match
+    assert [m.text for m in annotator.annotate("chest pain, unspecified")] == ["chest pain"]
+
+
+def test_wording_variants(annotator):
+    assert [(m.text, m.best.code) for m in annotator.annotate("type two diabetes and blood in the stool")] == [
+        ("type two diabetes", "C0011860"), ("blood in the stool", "C1321898")]
+
+
+def test_weak_codes_hidden_and_clinical_procedures_kept(annotator):
+    blood = annotator.annotate("blood in stool")[0]
+    assert blood.best.codes == {}                                    # the 0.3 link is below the threshold
+    assert annotator.annotate("blood in stool")[0].best.name == "Blood in stool"
+    assert [m.best.name for m in annotator.annotate("had a mastectomy")] == ["Mastectomy"]
+
+
+def test_manifestation_codes_count_half(annotator):
+    mention = annotator.annotate("pyelonephritis")[0]
+    assert mention.best.code == "C0034186"                            # the UMLS concept, not N16 itself
+    assert [l.code for l in mention.best.codes["ICD10CM"]] == ["N12", "N16"]   # N16 penalised, second
+    assert mention.candidates[1].code == "N16" and mention.candidates[1].score == 0.5
+
+
+def test_negation(annotator):
+    got = [(m.text, m.assertion) for m in annotator.annotate(
+        "Denies chest pain, headache, or diarrhea. Has had MI; no headache but vomiting since Monday. "
+        "Diarrhea was ruled out. Not only headache.")]
+    assert got == [("chest pain", "negated"), ("headache", "negated"), ("diarrhea", "negated"),
+                   ("MI", None), ("headache", "negated"), ("vomiting", None),
+                   ("Diarrhea", "negated"), ("headache", None)]
 
 
 def test_node_id_matches_brain_hashing(annotator):

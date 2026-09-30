@@ -1,5 +1,5 @@
 text,expect,forbid
-# expect: "phrase=CODE|CODE; ..." (ICD-10-CM, ICD-9-CM or NS fee code prefixes; * = any concept). forbid: "word; ..." must not be tagged.
+# expect: "phrase=CODE|CODE; ..." (ICD-10-CM, ICD-9-CM or NS fee code prefixes; * = any concept); "-phrase=..." must be tagged negated, others must not be. forbid: "word; ..." must not be tagged.
 "I've had this cough for about two weeks and now I'm running a fever",cough=R05|786.2; fever=R50|780.6,weeks
 "She said her chest pain started after dinner and went down her left arm",chest pain=R07|786.5,said; dinner; left
 "Past history of MI and high blood pressure, on metformin for type 2 diabetes",MI=I21|410; high blood pressure=I10|401; type 2 diabetes=E11|250,
@@ -24,9 +24,19 @@ text,expect,forbid
 "The rash on her arm looks like eczema",rash=R21|782.1; eczema=L30|L20|692|691,looks
 "Knee replacement scheduled for March",knee replacement=93.41|93.47|81.54,march
 "Stomach ache and bloating after meals",stomach ache=R10|789.0; bloating=R14|787.3,meals
-"No known allergies, no history of cancer",allergies=*; cancer=*,
+"No known allergies, no history of cancer",-allergies=*; -cancer=*,
 "Well, I was wondering if I could get my prescription refilled",,well; wondering
 "She's been anxious and having panic attacks",anxious=F41|300.0|R45; panic attacks=F41.0|300.01,
 "The baby has an ear infection again",ear infection=H66|H65|382|381,again
 "I need a tetanus shot, I stepped on a nail",tetanus shot=*,need
 "Her sugars have been all over the place and she's always thirsty",thirsty=R63.1|783.5,place
+"52 year old male presents with acute onset substernal chest pressure radiating to the jaw, diaphoretic, nauseated.",chest pressure=R07|786.5; nauseated=R11|787.0,male; presents
+"History of hypertension, hyperlipidemia, type two diabetes on insulin, and a prior CABG in 2018.",hypertension=I10|401; hyperlipidemia=E78|272; type two diabetes=E11|250; CABG=36.1|48.1,prior
+"She's had a runny nose and a stuffy head for a week, some ear pain, no fever.",runny nose=*; ear pain=H92|388.7; -fever=R50|780.6,week
+"He fell off a ladder and his ankle is swollen, can't put weight on it.",swollen=*,put weight; ladder
+"Patient denies shortness of breath, palpitations, or syncope.",-shortness of breath=R06|786.0; -palpitations=R00.2|785.1; -syncope=R55|780.2,
+"Complains of low back pain radiating down the left leg, numbness in the foot.",low back pain=M54.5|724.2,leg
+"Possible kidney infection, she has flank pain and burning urination.",kidney infection=N10|N12|N15|N39|590; flank pain=R10|789.0,possible
+"Blood in the stool for two days and some abdominal cramping.",blood in the stool=K92.1|R19.5|578.1|792.1; abdominal cramping=R10|789.0,days
+"History of breast cancer, had a mastectomy and chemo.",breast cancer=C50|174|Z85.3|V10.3; mastectomy=*; chemo=*,
+"No fever but a bad cough.",-fever=*; cough=R05|786.2,bad

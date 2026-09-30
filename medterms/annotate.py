@@ -27,9 +27,25 @@ Kept out on purpose:
     becomes two mentions, so each keeps its own codes
   * abbreviations, and any single word under three letters, unless written in capitals in the
     text ("MI" yes, "mi" and "me" no)
+  * matches across punctuation ("leg, numbness" is not "leg numbness")
+  * side synonyms of a single word that is the proper name of something non-clinical: "blood"
+    is listed as a synonym of leukemia, but it only counts for a concept named "Blood ..."
 
-`assertion` is reserved for negation / history / family context ("no chest pain", "mom had
-a stroke"); it is always None for now.
+Terms are also indexed without their bracketed parts ("Myocardial infarction (acute) NOS").
+Wording variations tried when the text doesn't match as written: a plural last word ("heart
+attacks"), number words ("type two diabetes" -> "type 2 diabetes") and articles ("blood in the
+stool" -> "blood in stool").
+
+Codes shown for a candidate are its links with confidence of at least `min_confidence` (0.4),
+billable codes ahead of categories unless a category is clearly the better match, and
+"unspecified" codes first among equals. Manifestation codes ("... in diseases classified
+elsewhere"), which ICD doesn't allow as a primary diagnosis, count half.
+
+`assertion` is "negated" when a negation cue governs the mention ("no fever", "denies shortness
+of breath, palpitations, or syncope", "MI was ruled out"), in the style of NegEx: a cue before
+the mention reaches forward to the end of its clause (a full stop, semicolon, colon or "but"),
+at most 12 words; a cue right after it ("... ruled out", "... negative") reaches back 3 words.
+Otherwise it is None. History and family context ("mom had a stroke") aren't detected yet.
 
 Every candidate has a `key` such as "umls:C0027051" or "icd10cm:I21.9", and `node_id`
 gives the 16-byte blake3 hash Brain uses for content-addressed nodes (pip install blake3).
@@ -41,7 +57,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from medterms.db import Database
-from medterms.lookup import DEFAULT_CONFIDENCE, MAPPING_RELATIONSHIPS
+from medterms.lookup import DEFAULT_CONFIDENCE, MANIFESTATION, MAPPING_RELATIONSHIPS
 from medterms.normalize import normalize_term
 
 VOCABULARIES = ("UMLS", "ICD10CM", "ICD9CM", "NS_MSI")
@@ -52,7 +68,32 @@ TERM_WEIGHT = {"preferred": 1.0, "clinical": 1.0, "lay": 0.9, "index": 0.8, "abb
 DOMAIN_WEIGHT = {"condition": 1.0, "symptom": 1.0, "procedure": 0.95, "observation": 0.85,
                  "drug": 0.8, "measurement": 0.8, "device": 0.7, "anatomy": 0.6, "other": 0.5}
 UNLINKED = 0.8   # a concept that reaches no code is still worth showing, but after those that do
-KEEP_UNLINKED = {"condition", "symptom"}   # other kinds of concept must reach a code to count
+KEEP_UNLINKED = {"condition", "symptom"}   # other kinds of concept must reach a code to count ...
+# ... unless their name has a clinical word in it ("Mastectomy", "Chemotherapy"), which "Reporting",
+# "Placement - action" and "Protocol Treatment Arm" don't
+CLINICAL_WORD = re.compile(
+    r"(itis|osis|emia|oma|pathy|algia|plegia|trophy|ectasia|iasis|rrhea|rrhage|cele|ectomy|otomy|ostomy|"
+    r"plasty|scopy|graphy|therapy|pexy|rrhaphy|centesis|transplant\w*|biops\w+|dialysis|vaccin\w*|immuni[sz]ation)$")
+NOT_CLINICAL = {"diagnosis", "prognosis", "osmosis", "hypothesis", "emphasis", "thesis"}
+MIN_CODE_CONFIDENCE = 0.4   # right answers from contained/broader matches score 0.43-0.5; wrong ones lower
+NON_BILLABLE = 0.1        # a category ranks behind a billable code unless it is this much more confident
+
+BREAK = re.compile(r"[,;.:!?()\[\]\n]")         # a match never spans these
+CLAUSE_END = re.compile(r"[;.:!?\n]")             # negation scope ends here (commas don't end it: lists)
+NUMBER_WORDS = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7",
+                "eight": "8", "nine": "9", "ten": "10"}
+ARTICLES = {"the", "a", "an"}
+BRACKETED = re.compile(r"\([^)]*\)|\[[^]]*\]")
+
+NEGATION_BEFORE = {"no", "not", "denies", "denied", "deny", "denying", "without", "negative for", "free of",
+                   "never had", "no history of", "no evidence of", "no sign of", "no signs of", "absence of",
+                   "rules out", "ruled out", "rule out", "no complaints of", "nor", "never"}
+NEGATION_AFTER = {"ruled out", "was ruled out", "is ruled out", "negative", "was negative", "is negative",
+                  "absent", "not present"}
+PSEUDO_NEGATION = {"not only", "no change", "no increase", "no further", "not ruled out", "not rule out",
+                   "gram negative", "no longer sure"}
+SCOPE_END_WORDS = {"but", "however", "although", "though", "except", "yet", "aside", "apart"}
+NEGATION_REACH, NEGATION_REACH_AFTER = 12, 3
 
 TOKEN = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")
 
@@ -140,7 +181,7 @@ class Annotator:
         self.domains = set(domains)
         self.max_words = max_words
         self.max_candidates = max_candidates
-        self._codes_cache: dict[int, dict[str, list[CodeLink]]] = {}
+        self._codes_cache: dict[tuple, dict[str, list[CodeLink]]] = {}
 
         vocab_list = list(vocabularies)
         marks = ",".join("?" * len(vocab_list))
@@ -161,9 +202,27 @@ class Annotator:
                 [*vocab_list, *self.domains]):
             if not self._usable(norm):
                 continue
-            entries = self.terms.setdefault(norm, [])
-            if not any(e[0] == cid and e[1] == term_type for e in entries):
-                entries.append((cid, term_type, term))
+            keys = {norm}
+            if BRACKETED.search(term):   # "Myocardial infarction (acute) NOS" -> "myocardial infarction nos"
+                stripped = normalize_term(BRACKETED.sub(" ", term))
+                if self._usable(stripped):
+                    keys.add(stripped)
+            words = norm.split()
+            if len(words) > 2 and ARTICLES & set(words):
+                keys.add(" ".join(w for w in words if w not in ARTICLES))
+            for key in keys:
+                entries = self.terms.setdefault(key, [])
+                if not any(e[0] == cid and e[1] == term_type for e in entries):
+                    entries.append((cid, term_type, term))
+
+        # Single words that are the proper name of something outside `domains` (blood the body
+        # substance, arm, patient). They only count for a concept named by that word: UMLS lists
+        # "blood" as a synonym of leukemia.
+        self.generic_words = {norm for (norm,) in db.query(
+            f"SELECT DISTINCT s.term_normalized FROM concept_synonym s JOIN concept c ON c.concept_id = s.concept_id "
+            f"WHERE c.vocabulary_id = 'UMLS' AND c.domain NOT IN ({dom_marks}) "
+            f"AND s.term_type IN ('preferred', 'clinical') AND s.term_normalized NOT LIKE '% %'",
+            list(self.domains))}
 
         # concepts that reach at least one code
         code_marks = ",".join("?" * len(CODE_VOCABULARIES))
@@ -184,39 +243,75 @@ class Annotator:
 
     # -- matching ------------------------------------------------------------------------
 
-    def annotate(self, text: str, with_codes: bool = True, codes_per_vocabulary: int = 3) -> list[Mention]:
-        tokens = [(m.start(), m.end(), normalize_term(m.group(0))) for m in TOKEN.finditer(text)]
-        tokens = [t for t in tokens if t[2]]
-        mentions = []
+    def annotate(self, text: str, with_codes: bool = True, codes_per_vocabulary: int = 3,
+                 min_confidence: float = MIN_CODE_CONFIDENCE) -> list[Mention]:
+        tokens = self._tokens(text)
+        mentions: list[tuple[int, int, Mention]] = []   # (first token, last token, mention)
         i = 0
         while i < len(tokens):
             found = None
             for n in range(min(self.max_words, len(tokens) - i), 0, -1):
-                words = [t[2] for t in tokens[i:i + n]]
+                if any(tokens[k][3] for k in range(i + 1, i + n)):
+                    continue   # would span punctuation
+                words = [tok[2] for tok in tokens[i:i + n]]
                 surface = text[tokens[i][0]:tokens[i + n - 1][1]]
-                entries = self._entries(" ".join(words), surface)
+                entries = self._lookup(words, surface)
                 if entries:
-                    found = (n, surface, entries)
+                    found = (n, entries)
                     break
             if found is None:
                 i += 1
                 continue
-            n, surface, entries = found
-            split = self._conjunction_split([t[2] for t in tokens[i:i + n]])
+            n, entries = found
+            split = self._conjunction_split([tok[2] for tok in tokens[i:i + n]])
             if split:
                 n = split
-                surface = text[tokens[i][0]:tokens[i + n - 1][1]]
-                entries = self._entries(" ".join(t[2] for t in tokens[i:i + n]), surface)
+                entries = self._lookup([tok[2] for tok in tokens[i:i + n]], text[tokens[i][0]:tokens[i + n - 1][1]])
             candidates = self._candidates(entries)
-            if candidates and not any(c.concept_id in self.linked or c.domain in KEEP_UNLINKED for c in candidates):
+            if candidates and not any(self._keep(c) for c in candidates):
                 candidates = []
             if candidates:
                 if with_codes:
                     for cand in candidates:
-                        cand.codes = self.codes(cand.concept_id, codes_per_vocabulary)
-                mentions.append(Mention(tokens[i][0], tokens[i + n - 1][1], surface, candidates))
+                        cand.codes = self.codes(cand.concept_id, codes_per_vocabulary, min_confidence)
+                start, end = tokens[i][0], tokens[i + n - 1][1]
+                mentions.append((i, i + n - 1, Mention(start, end, text[start:end], candidates)))
             i += n
-        return mentions
+        _mark_negation(tokens, mentions)
+        return [m for _, _, m in mentions]
+
+    @staticmethod
+    def _tokens(text: str) -> list[tuple[int, int, str, bool, bool]]:
+        """(start, end, normalized word, punctuation before it, clause ended before it)."""
+        out = []
+        prev_end = 0
+        for m in TOKEN.finditer(text):
+            norm = normalize_term(m.group(0))
+            if not norm:
+                continue
+            gap = text[prev_end:m.start()]
+            out.append((m.start(), m.end(), norm, bool(BREAK.search(gap)), bool(CLAUSE_END.search(gap))))
+            prev_end = m.end()
+        return out
+
+    def _lookup(self, words: list[str], surface: str):
+        """Entries for these words as written, else with number words as digits, else without articles."""
+        key = " ".join(words)
+        if words[0] in ARTICLES:
+            return self._entries(key, surface)   # a match doesn't start on "an" ("an ear infection")
+        variants = [key, " ".join(NUMBER_WORDS.get(w, w) for w in words)]
+        if len(words) > 2:
+            variants += [" ".join(w for w in v.split() if w not in ARTICLES) for v in variants]
+        for variant in dict.fromkeys(variants):
+            if variant and (entries := self._entries(variant, surface)):
+                return entries
+        return None
+
+    def _keep(self, cand: "Candidate") -> bool:
+        if cand.concept_id in self.linked or cand.domain in KEEP_UNLINKED:
+            return True
+        return any(CLINICAL_WORD.search(w) and w not in NOT_CLINICAL
+                   for w in normalize_term(f"{cand.name} {cand.matched_term}").split())
 
     def _conjunction_split(self, words: list[str]) -> int | None:
         """Word count of the left part when a match is 'X and/or Y' with X and Y both terms."""
@@ -236,6 +331,9 @@ class Annotator:
         if not capitals and " " not in key and len(key) < MIN_SINGLE_WORD:
             return None
         entries = [e for e in entries if e[1] != "abbreviation" or capitals]
+        if " " not in key and key in self.generic_words:
+            # only concepts actually named by the word, not ones listing it as a side synonym
+            entries = [e for e in entries if normalize_term(self.concepts[e[0]][2]) == key]
         return entries or None
 
     def _candidates(self, entries) -> list[Candidate]:
@@ -245,6 +343,8 @@ class Annotator:
             score = TERM_WEIGHT.get(term_type, 0.8) * DOMAIN_WEIGHT.get(domain, 0.5)
             if cid not in self.linked:
                 score *= UNLINKED
+            if vocab in CODE_VOCABULARIES and MANIFESTATION.search(name):
+                score *= 0.5
             if cid not in best or score > best[cid].score:
                 best[cid] = Candidate(cid, vocab, code, name, domain, term, term_type, round(score, 3))
         ranked = sorted(best.values(), key=lambda c: (-c.score, c.vocabulary != "UMLS", c.code))
@@ -252,11 +352,13 @@ class Annotator:
 
     # -- codes ---------------------------------------------------------------------------
 
-    def codes(self, concept_id: int, per_vocabulary: int = 3) -> dict[str, list[CodeLink]]:
+    def codes(self, concept_id: int, per_vocabulary: int = 3,
+              min_confidence: float = MIN_CODE_CONFIDENCE) -> dict[str, list[CodeLink]]:
         """Best codes per vocabulary for a concept: its own code if it is one, then its links
-        (not chapters or blocks), by confidence, billable first."""
-        if concept_id in self._codes_cache:
-            return self._codes_cache[concept_id]
+        (not chapters or blocks) with at least `min_confidence`."""
+        cache_key = (concept_id, per_vocabulary, min_confidence)
+        if cache_key in self._codes_cache:
+            return self._codes_cache[cache_key]
         hops = ",".join("?" * len(MAPPING_RELATIONSHIPS))
         code_marks = ",".join("?" * len(CODE_VOCABULARIES))
         rows = self.db.query(
@@ -268,18 +370,66 @@ class Annotator:
         own = self.concepts.get(concept_id)
         if own and own[0] in CODE_VOCABULARIES:
             billable = self.db.query("SELECT is_billable FROM concept WHERE concept_id = ?", (concept_id,))[0][0]
-            rows = [(own[0], own[1], own[2], billable, 1.0), *rows]
+            rows = [(own[0], own[1], own[2], billable, 0.5 if MANIFESTATION.search(own[2]) else 1.0), *rows]
         best: dict[tuple[str, str], CodeLink] = {}
         for vocab, code, name, billable, confidence in rows:
             link = CodeLink(vocab, code, name, bool(billable), round(float(confidence), 3))
             if (vocab, code) not in best or link.confidence > best[(vocab, code)].confidence:
                 best[(vocab, code)] = link
         out: dict[str, list[CodeLink]] = {}
-        for link in sorted(best.values(), key=lambda l: (-l.confidence, not l.billable, l.code)):
+        ranked = sorted((l for l in best.values() if l.confidence >= min_confidence),
+                        key=lambda l: (-(l.confidence - (0 if l.billable else NON_BILLABLE)),
+                                       "unspecified" not in l.name.lower(), l.code))
+        for link in ranked:
             if len(out.setdefault(link.vocabulary, [])) < per_vocabulary:
                 out[link.vocabulary].append(link)
-        self._codes_cache[concept_id] = out
+        self._codes_cache[cache_key] = out
         return out
+
+
+def _phrase_at(tokens, i: int, phrases: set[str], max_words: int = 4) -> int:
+    """Length in words of the longest phrase from `phrases` starting at token i (0 if none);
+    a phrase can't run across punctuation."""
+    for n in range(min(max_words, len(tokens) - i), 0, -1):
+        if any(tokens[k][3] for k in range(i + 1, i + n)):
+            continue
+        if " ".join(tok[2] for tok in tokens[i:i + n]) in phrases:
+            return n
+    return 0
+
+
+def _mark_negation(tokens, mentions) -> None:
+    """Set assertion = 'negated' on mentions governed by a negation cue (NegEx-style)."""
+    if not mentions:
+        return
+    cues_before: list[int] = []   # token index where each cue's scope starts
+    i = 0
+    while i < len(tokens):
+        if n := _phrase_at(tokens, i, PSEUDO_NEGATION):
+            i += n
+            continue
+        if n := _phrase_at(tokens, i, NEGATION_BEFORE):
+            cues_before.append(i + n)
+            i += n
+            continue
+        i += 1
+    for first, last, mention in mentions:
+        for scope_start in cues_before:
+            if scope_start > first or first - scope_start > NEGATION_REACH:
+                continue
+            # a clause break anywhere between the cue and the mention, or a "but" in between, ends the scope
+            blocked = (any(tokens[k][4] for k in range(scope_start, first + 1))
+                       or any(tokens[k][2] in SCOPE_END_WORDS for k in range(scope_start, first)))
+            if not blocked:
+                mention.assertion = "negated"
+                break
+        if mention.assertion is None:
+            for k in range(last + 1, min(last + 1 + NEGATION_REACH_AFTER, len(tokens))):
+                if tokens[k][4]:
+                    break
+                if _phrase_at(tokens, k, NEGATION_AFTER):
+                    mention.assertion = "negated"
+                    break
 
 
 def _singular(key: str) -> str:
@@ -299,7 +449,8 @@ def evaluate(annotator: Annotator, path: Path, verbose: bool = False) -> dict[st
 
     expect: 'words=CODE|CODE; words=CODE' — each listed phrase must be found as (part of) a
             mention whose top candidates reach a code starting with one of the prefixes
-            (ICD-10-CM, ICD-9-CM or NS); '*' accepts any candidate.
+            (ICD-10-CM, ICD-9-CM or NS); '*' accepts any candidate. A phrase starting with '-'
+            must be tagged negated; any other must not be.
     forbid: 'word; word' — phrases that must not be annotated.
     Mentions matching neither list are counted and listed as unreviewed extras.
     """
@@ -313,10 +464,12 @@ def evaluate(annotator: Annotator, path: Path, verbose: bool = False) -> dict[st
         for item in filter(None, (s.strip() for s in (row.get("expect") or "").split(";"))):
             phrase, _, want = item.partition("=")
             phrase, prefixes = phrase.strip().lower(), [p.strip() for p in want.split("|") if p.strip()]
+            negated = phrase.startswith("-")
+            phrase = phrase.lstrip("-").strip()
             expected += 1
             hit = None
             for idx, m in enumerate(mentions):
-                if phrase in m.text.lower() or m.text.lower() in phrase:
+                if (phrase in m.text.lower() or m.text.lower() in phrase) and (m.assertion == "negated") == negated:
                     codes = [l.code for c in m.candidates[:3] for links in c.codes.values() for l in links]
                     if not prefixes or prefixes == ["*"] or any(code.startswith(p) for code in codes for p in prefixes):
                         hit = idx
@@ -342,7 +495,8 @@ def evaluate(annotator: Annotator, path: Path, verbose: bool = False) -> dict[st
             print(row["text"])
             for m in mentions:
                 codes = "; ".join(f"{v} {links[0].code}" for v, links in m.best.codes.items() if links)
-                print(f"   [{m.text}] {m.best.name} ({m.best.domain}, {m.best.score}) {codes}")
+                flag = f" <{m.assertion}>" if m.assertion else ""
+                print(f"   [{m.text}]{flag} {m.best.name} ({m.best.domain}, {m.best.score}) {codes}")
     recall = found / expected if expected else 1.0
     print(f"{len(rows)} texts: expected mentions found {found}/{expected} ({recall:.0%}); "
           f"forbidden phrases annotated {forbidden_hits}/{forbidden}; other mentions {extras}")

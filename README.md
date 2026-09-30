@@ -99,7 +99,10 @@ and the Level 0 subset has no ICD-10-CM atoms, so only ~5% of lay concepts reach
 | broader | all but one of the concept's words, leaving a disease name (infective cystitis → Cystitis) | ≤ 0.55 |
 | gem | an ICD-9-CM link carried to ICD-10-CM through the GEMs, or the reverse | × 0.7–0.8 |
 
-Diagnosis concepts link only to diagnosis codes and procedure concepts only to procedure codes.
+Diagnosis concepts link only to diagnosis codes and procedure concepts only to procedure codes. Every
+link, UMLS's own included, is halved when the code's title adds context the concept doesn't have
+("Complications …, hypertension" or "Postprocedural hypertension" for Hypertensive disease) or is a
+manifestation code ICD doesn't allow as a primary diagnosis ("… in diseases classified elsewhere").
 
 `medterms evaluate eval/lay_terms.csv` on the Level 0 subset, after linking:
 
@@ -127,22 +130,38 @@ for m in annotator.annotate("hx of MI, now c/o chest pain and she's always thirs
 ```
 
 The annotator scans for the longest run of words (up to 10) that matches a known term, using the
-same normalization as the database, and folds plurals ("heart attacks"). Each mention keeps up to
-five candidate concepts, best first ("MI" is Myocardial Infarction before Motivational
-Interviewing), each with its best ICD-10-CM, ICD-9-CM and NS fee codes. It skips concepts that aren't
-conditions, symptoms, procedures or findings ("patient", "daughter"), common conversational words
-that happen to be UMLS strings ("said", "but"), mentions that reach no code unless they are a
-condition or symptom, and abbreviations not written in capitals. "X and Y" splits into two mentions
-when both halves are terms. `mention.assertion` is reserved for negation and history; it isn't
-detected yet. A 5,000-word transcript takes about 10 ms.
+same normalization as the database. Matches never cross punctuation. When the text doesn't match as
+written it also tries a plural last word ("heart attacks"), number words ("type two diabetes") and
+dropped articles ("blood in the stool"); terms are also indexed without their bracketed parts.
+
+Each mention keeps up to five candidate concepts, best first ("MI" is Myocardial Infarction before
+Motivational Interviewing), each with its best ICD-10-CM, ICD-9-CM and NS fee codes: links with
+confidence 0.4 or more, billable codes before categories, "unspecified" first among equals, and
+manifestation codes ("… in diseases classified elsewhere") at half weight.
+
+It skips:
+- concepts that aren't conditions, symptoms, procedures or findings ("patient", "daughter")
+- common conversational words that happen to be UMLS strings ("said", "but")
+- side synonyms of words that mainly name something non-clinical: UMLS lists "blood" as a synonym of leukemia
+- mentions that reach no code, unless they are a condition, a symptom, or have a clinical word in their name ("Mastectomy", "Chemotherapy")
+- abbreviations not written in capitals ("MI" yes, "me" no)
+
+"X and Y" splits into two mentions when both halves are terms.
+
+`mention.assertion` is `"negated"` when a negation cue governs the mention, NegEx-style: "no fever",
+"denies shortness of breath, palpitations, or syncope" (a cue reaches to the end of its clause, up to 12
+words), "MI was ruled out". History and family context ("mom had a stroke") aren't detected yet. After
+loading (2–5 s, ~250 MB), a 5,000-word transcript takes about 10 ms.
 
 Candidates carry a canonical `key` ("umls:C0027051", "icd10cm:I21.9"), and with `pip install -e ".[brain]"`
 a `node_id`: the first 16 bytes of `blake3(key)`, the same content addressing Brain uses for graph nodes.
 
-`medterms annotate --evaluate eval/annotate_sentences.csv` currently finds 37 of 41 expected mentions
-(90%) and tags none of the 30 forbidden words. The misses: "broke his wrist", "quit smoking",
-"stomach ache" (UMLS files it under dyspepsia) and "ear infection" (the concept is found but links to
-no code).
+`medterms annotate --evaluate eval/annotate_sentences.csv` (40 sentences, a development set the rules
+were tuned on) finds 60 of 64 expected mentions (94%), with negation scored, and tags one of 40
+forbidden phrases. Known problems: CHV junk lay terms ("can't put weight on it" → Failure to gain
+weight); genuinely ambiguous single words ("shot": injection or gunshot, tied); and missing lay
+wording ("broke his wrist", "quit smoking", "ear infection" has no code link, "stomach ache" is filed
+under dyspepsia).
 
 ### How a lay term reaches a code (example from the test data)
 
